@@ -8,18 +8,11 @@
 namespace iridium_driver
 {
 
-// ======================================================
-// Time helpers
-// ======================================================
-
 static uint64_t now_ms()
 {
     return to_ms_since_boot(get_absolute_time());
 }
 
-// ======================================================
-// UART backend (replaces SerialPort class entirely)
-// ======================================================
 
 static uart_inst_t* _uart_inst = nullptr;
 
@@ -73,9 +66,6 @@ static bool uart_read_line(char* buffer, size_t max_len, uint32_t timeout_ms)
     return idx > 0;
 }
 
-// ======================================================
-// Internal State
-// ======================================================
 
 static Config      _cfg;
 static bool        _initialized     = false;
@@ -89,9 +79,7 @@ static constexpr uint8_t  AT_MAX_RETRIES    = 3;
 static constexpr uint32_t AT_RETRY_DELAY_MS = 1000;
 static constexpr uint8_t  SES_MAX_RETRIES   = 1;
 
-// ======================================================
-// AT helpers
-// ======================================================
+
 
 static bool port_send(const char* s)
 {
@@ -153,19 +141,12 @@ static bool send_at_retry(const char* cmd,
     return false;
 }
 
-// ======================================================
-// Sleep pin helper
-// ======================================================
-
 static void set_sleep_pin(bool awake)
 {
     if (_cfg.sleep_pin != 0xFF)
         gpio_put(_cfg.sleep_pin, awake ? 1 : 0);
 }
 
-// ======================================================
-// Init
-// ======================================================
 
 bool init(const Config& config)
 {
@@ -180,17 +161,14 @@ bool init(const Config& config)
         return false;
     }
 
-    // ── UART peripheral init ──────────────────────────────────
     uart_init(_uart_inst, _cfg.baud_rate);
     gpio_set_function(_cfg.tx_pin, GPIO_FUNC_UART);
     gpio_set_function(_cfg.rx_pin, GPIO_FUNC_UART);
 
-    // Disable hardware flow control — RockBlock 9603 doesn't use it
     uart_set_hw_flow(_uart_inst, false, false);
     uart_set_format(_uart_inst, 8, 1, UART_PARITY_NONE);
     uart_set_fifo_enabled(_uart_inst, true);
 
-    // ── Optional sleep pin ────────────────────────────────────
     if (_cfg.sleep_pin != 0xFF)
     {
         gpio_init(_cfg.sleep_pin);
@@ -215,17 +193,11 @@ bool init(const Config& config)
     return true;
 }
 
-// ======================================================
-// Modem Health
-// ======================================================
 
 bool is_alive()           { return send_at("AT"); }
 bool is_busy()            { return _session_active; }
 bool ring_alert_pending() { return _mt_pending; }
 
-// ======================================================
-// Signal
-// ======================================================
 
 SignalQuality signal_quality()
 {
@@ -271,16 +243,9 @@ bool network_available()
     return (uint8_t)signal_quality() >= MIN_USABLE_SIGNAL;
 }
 
-// ======================================================
-// Timeout configuration
-// ======================================================
 
 void set_session_timeout_ms(uint32_t ms) { _session_timeout = ms; }
 void set_at_timeout_ms(uint32_t ms)      { _at_timeout = ms; }
-
-// ======================================================
-// Messaging — MO (write_message)
-// ======================================================
 
 bool write_message(const uint8_t* data, uint16_t length)
 {
@@ -388,9 +353,6 @@ bool write_message(const uint8_t* data, uint16_t length)
     return false;
 }
 
-// ======================================================
-// Session (SBDIX)
-// ======================================================
 
 static SbdixResult attempt_session_ex()
 {
@@ -520,9 +482,6 @@ SessionResult start_session()
     }
 }
 
-// ======================================================
-// Messaging — MT (read_message)
-// ======================================================
 
 bool message_available()
 {

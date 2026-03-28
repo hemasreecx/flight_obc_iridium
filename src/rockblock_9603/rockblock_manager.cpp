@@ -8,18 +8,12 @@
 namespace rockblock_manager
 {
 
-// ======================================================
-// Time helper
-// ======================================================
 
 static uint32_t monotonic_ms()
 {
     return to_ms_since_boot(get_absolute_time());
 }
 
-// ======================================================
-// Internal state
-// ======================================================
 
 static bool         _initialized        = false;
 static bool         _modem_sleeping     = false;
@@ -148,9 +142,6 @@ void shutdown()
     _state          = ManagerState::IDLE;
 }
 
-// ======================================================
-// Transmission
-// ======================================================
 
 bool transmit_record(const log_format::Record& rec)
 {

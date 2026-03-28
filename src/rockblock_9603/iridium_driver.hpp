@@ -6,18 +6,10 @@
 namespace iridium_driver
 {
 
-// ==============================
-// Constants
-// ==============================
-
 constexpr uint16_t MAX_SBD_PAYLOAD            = 340;
 constexpr uint32_t DEFAULT_SESSION_TIMEOUT_MS = 20000;
 constexpr uint32_t DEFAULT_AT_TIMEOUT_MS      = 1000;
 constexpr uint8_t  MIN_USABLE_SIGNAL          = 2;
-
-// ==============================
-// Configuration (Pico UART)
-// ==============================
 
 struct Config
 {
@@ -31,9 +23,6 @@ struct Config
     uint8_t      ri_pin;        // IRIDIUM_RI_PIN     (GPIO3) — ring indicator input
 };
 
-// ==============================
-// Full +SBDIX response
-// ==============================
 
 struct SbdixResult
 {
@@ -46,9 +35,6 @@ struct SbdixResult
     bool valid;
 };
 
-// ==============================
-// Enums
-// ==============================
 
 enum class SignalQuality : uint8_t
 {
@@ -61,25 +47,13 @@ enum class SignalQuality : uint8_t
     UNKNOWN   = 255
 };
 
-/* ============================================================
-   SessionResult
-   Full MO status code mapping from AT+SBDIX response.
-   Source: RockBLOCK 9603 AT command reference, +SBDIX section.
-
-   0–4   : Success
-   10–19 : Network / protocol failures
-   32–38 : Service / radio failures
-   64–65 : Hardware failures
-   ============================================================ */
 enum class SessionResult : uint8_t
 {
-    // ── Success ──────────────────────────────────────────────
     SUCCESS                   = 0,    // MO transferred successfully
     SUCCESS_MT_TOO_BIG        = 1,    // MO ok, MT message too big to transfer
     SUCCESS_LOCATION_REJECTED = 2,    // MO ok, Location Update not accepted
     // 3–4: reserved success
 
-    // ── Network / protocol failures ──────────────────────────
     TIMEOUT_GSS               = 10,   // call did not complete in allowed time
     MO_QUEUE_FULL             = 11,   // MO message queue at GSS is full
     TOO_MANY_SEGMENTS         = 12,   // MO message has too many segments
@@ -90,8 +64,6 @@ enum class SessionResult : uint8_t
     GATEWAY_NOT_RESPONDING    = 17,   // local session timeout
     CONNECTION_LOST           = 18,   // RF drop
     LINK_FAILURE              = 19,   // protocol error caused call termination
-
-    // ── Service / radio failures ─────────────────────────────
     NO_NETWORK                = 32,   // no network service
     ANTENNA_FAULT             = 33,   // antenna fault
     RADIO_DISABLED            = 34,   // radio disabled (*Rn command)
@@ -100,11 +72,9 @@ enum class SessionResult : uint8_t
     SBD_SERVICE_DISABLED      = 37,   // SBD service temporarily disabled
     TRY_LATER_TRAFFIC         = 38,   // traffic management period
 
-    // ── Hardware failures ─────────────────────────────────────
     BAND_VIOLATION            = 64,   // transmit outside permitted frequency band
     PLL_LOCK_FAILURE          = 65,   // hardware error during transmit
 
-    // ── Catch-all ─────────────────────────────────────────────
     UNKNOWN_ERROR             = 255
 };
 
@@ -125,9 +95,6 @@ enum class DriverError : uint8_t
     UNKNOWN
 };
 
-// ==============================
-// API
-// ==============================
 
 bool init(const Config& config);
 

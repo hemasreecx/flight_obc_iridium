@@ -1,4 +1,4 @@
-// src/pin_config.hpp
+
 #pragma once
 #include "hardware/i2c.h"
 #include "hardware/uart.h"

@@ -25,17 +25,15 @@ enum class ManagerError : uint8_t
     UNKNOWN
 };
 
-// ── Core lifecycle ────────────────────────────────────────
 bool init(const iridium_driver::Config& cfg);
 bool is_initialized();
 void shutdown();
 
-// ── Transmission ─────────────────────────────────────────
 // Pass record directly — no internal buffer
 bool transmit_record(const log_format::Record& rec);
 bool force_transmit(const log_format::Record& rec);
 
-// ── Task ─────────────────────────────────────────────────
+
 // Call every loop — handles timing + sleep/wake
 bool task(const log_format::Record& rec);
 
