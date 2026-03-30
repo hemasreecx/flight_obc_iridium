@@ -11,12 +11,12 @@ constexpr uint8_t COMMIT_COMPLETE   = 1;
 struct Record
 {
     uint32_t counter;
-    uint32_t gps_time;
-    int32_t  latitude;
-    int32_t  longitude;
-    int32_t  altitude;
+    uint32_t gps_time; // sim
+    int32_t  latitude; // sim
+    int32_t  longitude; // sim
+    int32_t  altitude; // sim
 
-    int16_t thermocouples[20];
+    int16_t thermocouples[20]; //sim
 
     int16_t acc3_x;
     int16_t acc3_y;
@@ -33,10 +33,10 @@ struct Record
     int16_t mag_y;
     int16_t mag_z;
 
-    uint16_t battery_voltage;
-    int16_t  battery_current;
+    uint16_t battery_voltage; //sim
+    int16_t  battery_current; //sim
 
-    int16_t imu_temperature;
+    int16_t imu_temperature; 
 
     uint8_t commit;
 };
