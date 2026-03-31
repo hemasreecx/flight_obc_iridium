@@ -4,13 +4,13 @@
 #include "hardware/uart.h"
 
 // ── I2C buses ────────────────────────────────────────
-#define KX134_I2C_BUS      i2c1
-#define KX134_SDA_PIN      10
-#define KX134_SCL_PIN      11
+#define KX134_I2C_BUS      i2c0
+#define KX134_SDA_PIN      12
+#define KX134_SCL_PIN      13
 
-#define MAG_I2C_BUS      i2c0
-#define MAG_SDA_PIN      12
-#define MAG_SCL_PIN      13
+#define MAG_I2C_BUS      i2c1
+#define MAG_SDA_PIN      10
+#define MAG_SCL_PIN      11
 
 // ── UART (Iridium) ───────────────────────────────────
 #define IRIDIUM_UART     uart1
