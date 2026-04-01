@@ -176,15 +176,6 @@ bool init(const Config& config)
         return false;
     }
 
-    // ── Deinit first — clean slate ────────────────────────────
-    uart_deinit(_uart_inst);
-    sleep_ms(10);
-
-    // ── UART init — identical to working bridge ───────────────
-uart_init(_uart_inst, _cfg.baud_rate);
-gpio_set_function(_cfg.tx_pin, GPIO_FUNC_UART);
-gpio_set_function(_cfg.rx_pin, GPIO_FUNC_UART);
-
 // ── Raw loopback test ─────────────────────────────────
 printf("[iridium] raw test — sending AT every 500ms for 5s\n");
 fflush(stdout);

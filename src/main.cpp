@@ -623,6 +623,15 @@ int main()
 {
     stdio_init_all();
 
+    // ── Pre-init UART1 for Iridium ────────────────────────────
+    // Must be done once at boot before anything else.
+    // iridium_driver will use this — never reinit.
+    uart_init(uart1, 19200);
+    gpio_set_function(IRIDIUM_TX_PIN, GPIO_FUNC_UART);
+    gpio_set_function(IRIDIUM_RX_PIN, GPIO_FUNC_UART);
+    sleep_ms(100);
+    // ─────────────────────────────────────────────────────────
+
     while (!stdio_usb_connected())
         sleep_ms(100);
 
