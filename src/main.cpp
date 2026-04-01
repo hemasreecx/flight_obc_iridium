@@ -1,28 +1,25 @@
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
 #include "hardware/gpio.h"
+#include "hardware/uart.h"
 #include <stdio.h>
-#include <stdlib.h>   // rand(), srand()
+#include <stdlib.h>
 #include <stdint.h>
 
 #include "pin_config.hpp"
 #include "log_format.hpp"
 
-// ── Drivers ──────────────────────────────────────────────────
 #include "drivers/kx134.hpp"
 #include "drivers/qmc5883l.hpp"
 
-// ── Modules ──────────────────────────────────────────────────
 #include "modules/imu_conversion.hpp"
 #include "modules/imu_acquisition.hpp"
 #include "modules/mag_conversion.hpp"
 #include "modules/mag_acquisition.hpp"
 
-// ── Logging ──────────────────────────────────────────────────
 #include "logging/kx_data_logger.hpp"
 #include "logging/qmc_data_logger.hpp"
 
-// ── Iridium ──────────────────────────────────────────────────
 #include "rockblock_9603/iridium_driver.hpp"
 #include "rockblock_9603/rockblock_manager.hpp"
 
@@ -45,8 +42,6 @@
 #define RECALIB_PROMPT_MS       5000
 
 #define LED_PIN                 25
-
-// Iridium TX interval — RockBlock minimum ~20s recommended
 #define TX_INTERVAL_MS          20000
 
 /* ============================================================
@@ -75,8 +70,8 @@ static MagDataLogger qmc_logger(MagLoggerMode::CONVERTED);
    GLOBAL SENSOR OBJECTS
    ============================================================ */
 
-static KX134         imu(KX134_I2C_BUS,  KX134_ADDRESS);
-static QMC5883L      mag(MAG_I2C_BUS);
+static KX134          imu(KX134_I2C_BUS, KX134_ADDRESS);
+static QMC5883L       mag(MAG_I2C_BUS);
 static IMUAcquisition imu_acq(imu, kx_logger);
 static MagAcquisition mag_acq(mag, qmc_logger);
 
@@ -93,14 +88,13 @@ static const QMC5883L_Config MAG_CONFIG = {
    SYSTEM STATE
    ============================================================ */
 
-static volatile bool     system_initialized = false;
-static volatile uint32_t loop_count         = 0;
-static volatile uint32_t imu_comm_errors    = 0;
-static volatile uint32_t mag_comm_errors    = 0;
+static volatile bool     system_initialized    = false;
+static volatile uint32_t loop_count            = 0;
+static volatile uint32_t imu_comm_errors       = 0;
+static volatile uint32_t mag_comm_errors       = 0;
 static volatile uint32_t imu_recovery_attempts = 0;
 static volatile uint32_t mag_recovery_attempts = 0;
 
-// Counter for log_format::Record
 static uint32_t record_counter = 0;
 
 /* ============================================================
@@ -118,7 +112,7 @@ static void led_on()  { gpio_put(LED_PIN, 1); }
 static void led_off() { gpio_put(LED_PIN, 0); }
 
 /* ============================================================
-   RNG HELPERS — for simulated fields
+   RNG HELPERS
    ============================================================ */
 
 static void rng_init()
@@ -221,7 +215,7 @@ static void run_imu_calibration(int16_t& out_x,
     led_on();
 
     int32_t sum_x = 0, sum_y = 0, sum_z = 0;
-    int32_t valid  = 0;
+    int32_t valid = 0;
 
     for (int i = 0; i < CALIB_SAMPLES; i++)
     {
@@ -249,10 +243,10 @@ static void run_imu_calibration(int16_t& out_x,
     float avg_y = (float)sum_y / valid;
     float avg_z = (float)sum_z / valid;
 
-    float one_g  = 1.0f / imu_acq.getConverterScale();
-    float abs_x  = avg_x < 0.0f ? -avg_x : avg_x;
-    float abs_y  = avg_y < 0.0f ? -avg_y : avg_y;
-    float abs_z  = avg_z < 0.0f ? -avg_z : avg_z;
+    float one_g = 1.0f / imu_acq.getConverterScale();
+    float abs_x = avg_x < 0.0f ? -avg_x : avg_x;
+    float abs_y = avg_y < 0.0f ? -avg_y : avg_y;
+    float abs_z = avg_z < 0.0f ? -avg_z : avg_z;
 
     float exp_x = (abs_x > abs_y && abs_x > abs_z) ? one_g : 0.0f;
     float exp_y = (abs_y > abs_x && abs_y > abs_z) ? one_g : 0.0f;
@@ -285,7 +279,7 @@ static void run_mag_calibration(int16_t& out_x,
 
     int16_t min_x =  32767, min_y =  32767, min_z =  32767;
     int16_t max_x = -32768, max_y = -32768, max_z = -32768;
-    int32_t valid  = 0;
+    int32_t valid = 0;
 
     for (int i = 0; i < CALIB_SAMPLES; i++)
     {
@@ -353,12 +347,44 @@ static bool wait_for_recalib_request()
 }
 
 /* ============================================================
-   FILL RECORD
-   Real:      acc3_x/y/z (KX134 raw counts)
-              mag_x/y/z  (QMC gauss × 1000 → int16)
-              imu_temperature (QMC temp × 100 → int16)
-              counter
+   PRINT RECORD — full struct to USB serial
+   ============================================================ */
 
+static void print_record(const log_format::Record& r)
+{
+    printf("---[RECORD ctr=%lu]---\n", r.counter);
+
+    // ── Real sensor fields ────────────────────────────────────
+    printf("acc3:  %d, %d, %d\n",
+           r.acc3_x, r.acc3_y, r.acc3_z);
+    printf("mag:   %d, %d, %d\n",
+           r.mag_x, r.mag_y, r.mag_z);
+    printf("temp:  %.2f C\n",
+           (double)(r.imu_temperature / 100.0f));
+
+    // ── Simulated fields ──────────────────────────────────────
+    printf("gps:   time=%lu lat=%ld lon=%ld alt=%ld\n",
+           r.gps_time, r.latitude, r.longitude, r.altitude);
+    printf("bat:   %u mV, %d mA\n",
+           r.battery_voltage, r.battery_current);
+    printf("imu:   acc=%d,%d,%d gyro=%d,%d,%d\n",
+           r.imu_acc_x, r.imu_acc_y, r.imu_acc_z,
+           r.imu_gyro_x, r.imu_gyro_y, r.imu_gyro_z);
+
+    // ── Thermocouples ─────────────────────────────────────────
+    printf("tc:    ");
+    for (int i = 0; i < 20; i++)
+        printf("%d ", r.thermocouples[i]);
+    printf("\n");
+
+    printf("commit:%d size=%lu bytes\n\n",
+           r.commit, log_format::RECORD_SIZE);
+    fflush(stdout);
+}
+
+/* ============================================================
+   FILL RECORD
+   Real:      acc3_x/y/z, mag_x/y/z, imu_temperature, counter
    Simulated: everything else
    ============================================================ */
 
@@ -368,10 +394,8 @@ static void fill_record(log_format::Record& r)
 
     r.counter = record_counter++;
 
-    // ── REAL: KX134 accelerometer ─────────────────────────────
-    KX134_Raw    kx_raw;
-    IMU_Data     kx_conv;
-    // imu_acq.task() logs internally — read raw directly for record
+    // ── REAL: KX134 ───────────────────────────────────────────
+    KX134_Raw kx_raw;
     if (imu.readRaw(kx_raw) == KX134_Status::OK)
     {
         r.acc3_x = kx_raw.x;
@@ -379,28 +403,24 @@ static void fill_record(log_format::Record& r)
         r.acc3_z = kx_raw.z;
     }
 
-    // ── REAL: QMC5883L magnetometer + temperature ─────────────
-    const MagSample& mag_sample = mag_acq.getLatestSample();
-    r.mag_x = (int16_t)(mag_sample.x_gauss * 1000.0f);
-    r.mag_y = (int16_t)(mag_sample.y_gauss * 1000.0f);
-    r.mag_z = (int16_t)(mag_sample.z_gauss * 1000.0f);
-
-    // imu_temperature field reused for mag temperature
-    // stored as °C × 100 → int16
-    // Note: field named imu_temperature but carries mag temp here
-    r.imu_temperature = (int16_t)(mag_sample.temperature * 100.0f);
+    // ── REAL: QMC5883L ────────────────────────────────────────
+    const MagSample& s = mag_acq.getLatestSample();
+    r.mag_x           = (int16_t)(s.x_gauss    * 1000.0f);
+    r.mag_y           = (int16_t)(s.y_gauss    * 1000.0f);
+    r.mag_z           = (int16_t)(s.z_gauss    * 1000.0f);
+    r.imu_temperature = (int16_t)(s.temperature * 100.0f);
 
     // ── SIMULATED: GPS ────────────────────────────────────────
     r.gps_time  = to_ms_since_boot(get_absolute_time()) / 1000;
-    r.latitude  = rng_range(280000000, 280100000);   // ~28.0°N
-    r.longitude = rng_range(770000000, 770100000);   // ~77.0°E
-    r.altitude  = rng_range(200000,    250000);      // 200–250m in mm
+    r.latitude  = rng_range(280000000, 280100000);
+    r.longitude = rng_range(770000000, 770100000);
+    r.altitude  = rng_range(200000,    250000);
 
-    // ── SIMULATED: 20 thermocouples (°C × 10) ─────────────────
+    // ── SIMULATED: Thermocouples ──────────────────────────────
     for (int i = 0; i < 20; i++)
         r.thermocouples[i] = (int16_t)rng_range(200, 400);
 
-    // ── SIMULATED: IMU (separate from KX134) ──────────────────
+    // ── SIMULATED: Second IMU ─────────────────────────────────
     r.imu_acc_x  = (int16_t)rng_range(-500,  500);
     r.imu_acc_y  = (int16_t)rng_range(-500,  500);
     r.imu_acc_z  = (int16_t)rng_range(9500, 10500);
@@ -488,7 +508,7 @@ static bool system_init(bool force_recalib)
         else
         {
             run_imu_calibration(ox, oy, oz);
-            printf("IMU calibration done. Prepare to rotate sensor in figure-8...\n");
+            printf("IMU calib done. Prepare for mag figure-8...\n");
             fflush(stdout);
             sleep_ms(3000);
         }
@@ -518,13 +538,13 @@ static bool system_init(bool force_recalib)
 
     // ── Iridium init ──────────────────────────────────────────
     iridium_driver::Config iridium_cfg;
-    iridium_cfg.uart_inst       = IRIDIUM_UART;
-    iridium_cfg.tx_pin = IRIDIUM_TX_PIN;  
-    iridium_cfg.rx_pin = IRIDIUM_RX_PIN;  
+    iridium_cfg.uart_inst  = IRIDIUM_UART;
+    iridium_cfg.tx_pin     = IRIDIUM_TX_PIN;
+    iridium_cfg.rx_pin     = IRIDIUM_RX_PIN;
     iridium_cfg.baud_rate  = 19200;
-    iridium_cfg.sleep_pin  = 0xFF; //IRIDIUM_ONOFF_PIN;
-    iridium_cfg.netavb_pin = 0xFF; //IRIDIUM_NETAVB_PIN;
-    iridium_cfg.ri_pin     = 0xFF;//IRIDIUM_RI_PIN;
+    iridium_cfg.sleep_pin  = 0xFF;
+    iridium_cfg.netavb_pin = 0xFF;
+    iridium_cfg.ri_pin     = 0xFF;
 
     if (!rockblock_manager::init(iridium_cfg))
     {
@@ -558,7 +578,7 @@ static void main_loop()
         imu_comm_errors       = 0;
         imu_recovery_attempts = 0;
     }
-    else if (imu_status != KX134_Status::OK)
+    else
     {
         imu_comm_errors++;
         if (imu_comm_errors >= MAX_COMM_ERRORS)
@@ -607,9 +627,17 @@ static void main_loop()
         }
     }
 
-    // ── Fill + transmit record ────────────────────────────────
+    // ── Fill record ───────────────────────────────────────────
     log_format::Record rec;
     fill_record(rec);
+
+    // ── Print full record every 50 loops ──────────────────────
+#if SYSTEM_DEBUG
+    if (loop_count % 50 == 0)
+        print_record(rec);
+#endif
+
+    // ── Transmit ──────────────────────────────────────────────
     rockblock_manager::task(rec);
 
     loop_count++;
@@ -624,13 +652,10 @@ int main()
     stdio_init_all();
 
     // ── Pre-init UART1 for Iridium ────────────────────────────
-    // Must be done once at boot before anything else.
-    // iridium_driver will use this — never reinit.
     uart_init(uart1, 19200);
     gpio_set_function(IRIDIUM_TX_PIN, GPIO_FUNC_UART);
     gpio_set_function(IRIDIUM_RX_PIN, GPIO_FUNC_UART);
     sleep_ms(100);
-    // ─────────────────────────────────────────────────────────
 
     while (!stdio_usb_connected())
         sleep_ms(100);
