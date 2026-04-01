@@ -519,12 +519,12 @@ static bool system_init(bool force_recalib)
     // ── Iridium init ──────────────────────────────────────────
     iridium_driver::Config iridium_cfg;
     iridium_cfg.uart_inst       = IRIDIUM_UART;
-    iridium_cfg.tx_pin     = IRIDIUM_TX_PIN;
-    iridium_cfg.rx_pin     = IRIDIUM_RX_PIN;
+    iridium_cfg.tx_pin = IRIDIUM_TX_PIN;  
+    iridium_cfg.rx_pin = IRIDIUM_RX_PIN;  
     iridium_cfg.baud_rate  = 19200;
-    iridium_cfg.sleep_pin  = IRIDIUM_ONOFF_PIN;
-    iridium_cfg.netavb_pin = IRIDIUM_NETAVB_PIN;
-    iridium_cfg.ri_pin     = IRIDIUM_RI_PIN;
+    iridium_cfg.sleep_pin  = 0xFF; //IRIDIUM_ONOFF_PIN;
+    iridium_cfg.netavb_pin = 0xFF; //IRIDIUM_NETAVB_PIN;
+    iridium_cfg.ri_pin     = 0xFF;//IRIDIUM_RI_PIN;
 
     if (!rockblock_manager::init(iridium_cfg))
     {

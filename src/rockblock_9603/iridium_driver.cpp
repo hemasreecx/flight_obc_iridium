@@ -8,11 +8,18 @@
 namespace iridium_driver
 {
 
+// ======================================================
+// Time helper
+// ======================================================
+
 static uint64_t now_ms()
 {
     return to_ms_since_boot(get_absolute_time());
 }
 
+// ======================================================
+// UART backend
+// ======================================================
 
 static uart_inst_t* _uart_inst = nullptr;
 
@@ -66,6 +73,9 @@ static bool uart_read_line(char* buffer, size_t max_len, uint32_t timeout_ms)
     return idx > 0;
 }
 
+// ======================================================
+// Internal state
+// ======================================================
 
 static Config      _cfg;
 static bool        _initialized     = false;
@@ -79,7 +89,9 @@ static constexpr uint8_t  AT_MAX_RETRIES    = 3;
 static constexpr uint32_t AT_RETRY_DELAY_MS = 1000;
 static constexpr uint8_t  SES_MAX_RETRIES   = 1;
 
-
+// ======================================================
+// AT helpers
+// ======================================================
 
 static bool port_send(const char* s)
 {
@@ -147,12 +159,15 @@ static void set_sleep_pin(bool awake)
         gpio_put(_cfg.sleep_pin, awake ? 1 : 0);
 }
 
+// ======================================================
+// Init
+// ======================================================
 
 bool init(const Config& config)
 {
     if (_initialized) sleep();
 
-    _cfg      = config;
+    _cfg       = config;
     _uart_inst = _cfg.uart_inst;
 
     if (_uart_inst == nullptr)
@@ -161,23 +176,87 @@ bool init(const Config& config)
         return false;
     }
 
-    uart_init(_uart_inst, _cfg.baud_rate);
-    gpio_set_function(_cfg.tx_pin, GPIO_FUNC_UART);
-    gpio_set_function(_cfg.rx_pin, GPIO_FUNC_UART);
+    // ── Deinit first — clean slate ────────────────────────────
+    uart_deinit(_uart_inst);
+    sleep_ms(10);
 
-    uart_set_hw_flow(_uart_inst, false, false);
-    uart_set_format(_uart_inst, 8, 1, UART_PARITY_NONE);
-    uart_set_fifo_enabled(_uart_inst, true);
+    // ── UART init — identical to working bridge ───────────────
+uart_init(_uart_inst, _cfg.baud_rate);
+gpio_set_function(_cfg.tx_pin, GPIO_FUNC_UART);
+gpio_set_function(_cfg.rx_pin, GPIO_FUNC_UART);
 
+// ── Raw loopback test ─────────────────────────────────
+printf("[iridium] raw test — sending AT every 500ms for 5s\n");
+fflush(stdout);
+
+uint64_t test_end = now_ms() + 5000;
+int cycle = 0;
+while (now_ms() < test_end)
+{
+    printf("[cycle %d] sending: A T CR\n", cycle++);
+    fflush(stdout);
+    uart_putc_raw(_uart_inst, 'A');
+    uart_putc_raw(_uart_inst, 'T');
+    uart_putc_raw(_uart_inst, '\r');
+
+    sleep_ms(500);
+
+    printf("[cycle] rx: ");
+    if (!uart_is_readable(_uart_inst))
+    {
+        printf("(nothing)");
+    }
+    while (uart_is_readable(_uart_inst))
+    {
+        uint8_t b = uart_getc(_uart_inst);
+        if (b >= 32 && b < 127) printf("'%c'", b);
+        else printf("[0x%02X]", b);
+    }
+    printf("\n");
+    fflush(stdout);
+}
+
+    // ── Drain boot messages ───────────────────────────────────
+    sleep_ms(2000);
+    uint32_t drained = 0;
+    while (uart_is_readable(_uart_inst))
+    {
+        char c = uart_getc(_uart_inst);
+        if (c >= 32 && c < 127) printf("%c", c);
+        else printf("[0x%02X]", (uint8_t)c);
+        drained++;
+    }
+    if (drained > 0) printf("\n");
+    printf("[iridium] drained %lu bytes\n", drained);
+    fflush(stdout);
+    sleep_ms(100);
+
+    // ── Optional sleep pin ────────────────────────────────────
     if (_cfg.sleep_pin != 0xFF)
     {
         gpio_init(_cfg.sleep_pin);
         gpio_set_dir(_cfg.sleep_pin, GPIO_OUT);
-        set_sleep_pin(true);   // assert awake
+        gpio_put(_cfg.sleep_pin, 0);
+        sleep_ms(100);
+        gpio_put(_cfg.sleep_pin, 1);
+        sleep_ms(100);
+        gpio_put(_cfg.sleep_pin, 0);
+        sleep_ms(2000);
     }
 
-    sleep_ms(200);
+    // ── Optional input pins ───────────────────────────────────
+    if (_cfg.netavb_pin != 0xFF)
+    {
+        gpio_init(_cfg.netavb_pin);
+        gpio_set_dir(_cfg.netavb_pin, GPIO_IN);
+    }
+    if (_cfg.ri_pin != 0xFF)
+    {
+        gpio_init(_cfg.ri_pin);
+        gpio_set_dir(_cfg.ri_pin, GPIO_IN);
+    }
 
+    // ── AT handshake ──────────────────────────────────────────
     if (!send_at_retry("AT"))
     {
         _last_error = DriverError::MODEM_NOT_RESPONDING;
@@ -193,11 +272,17 @@ bool init(const Config& config)
     return true;
 }
 
+// ======================================================
+// Modem health
+// ======================================================
 
 bool is_alive()           { return send_at("AT"); }
 bool is_busy()            { return _session_active; }
 bool ring_alert_pending() { return _mt_pending; }
 
+// ======================================================
+// Signal
+// ======================================================
 
 SignalQuality signal_quality()
 {
@@ -243,9 +328,16 @@ bool network_available()
     return (uint8_t)signal_quality() >= MIN_USABLE_SIGNAL;
 }
 
+// ======================================================
+// Timeout configuration
+// ======================================================
 
 void set_session_timeout_ms(uint32_t ms) { _session_timeout = ms; }
 void set_at_timeout_ms(uint32_t ms)      { _at_timeout = ms; }
+
+// ======================================================
+// Messaging — MO
+// ======================================================
 
 bool write_message(const uint8_t* data, uint16_t length)
 {
@@ -267,8 +359,6 @@ bool write_message(const uint8_t* data, uint16_t length)
 
     uint64_t t0 = now_ms();
 
-    // Settle delay — modem needs time after previous AT command
-    // before reliably responding to AT+SBDWB READY prompt
     sleep_ms(1000);
     printf("[SBDWB] sending AT+SBDWB=%d\n", (int)length);
 
@@ -302,7 +392,6 @@ bool write_message(const uint8_t* data, uint16_t length)
         return false;
     }
 
-    // Send payload
     if (!uart_send(data, length, _at_timeout))
     {
         printf("[SBDWB] payload write FAILED (%llums)\n",
@@ -311,7 +400,6 @@ bool write_message(const uint8_t* data, uint16_t length)
         return false;
     }
 
-    // Send checksum (big-endian)
     uint16_t checksum = 0;
     for (uint16_t i = 0; i < length; i++)
         checksum = (uint16_t)(checksum + data[i]);
@@ -326,7 +414,6 @@ bool write_message(const uint8_t* data, uint16_t length)
         return false;
     }
 
-    // Read write status
     deadline = now_ms() + _at_timeout;
     while (now_ms() < deadline)
     {
@@ -353,12 +440,15 @@ bool write_message(const uint8_t* data, uint16_t length)
     return false;
 }
 
+// ======================================================
+// Session
+// ======================================================
 
 static SbdixResult attempt_session_ex()
 {
     SbdixResult res  = {};
     res.valid        = false;
-    res.mo_status    = 32;   // default: no network
+    res.mo_status    = 32;
 
     _session_active  = true;
     _mt_pending      = false;
@@ -438,7 +528,6 @@ SbdixResult start_session_ex()
         last_res = attempt_session_ex();
         if (last_res.mo_status == 0) return last_res;
 
-        // Radio disabled — permanent, no point retrying
         if (last_res.mo_status == 34)
         {
             _last_error = DriverError::SESSION_FAILED;
@@ -482,6 +571,9 @@ SessionResult start_session()
     }
 }
 
+// ======================================================
+// Messaging — MT
+// ======================================================
 
 bool message_available()
 {
@@ -537,11 +629,9 @@ bool read_message(uint8_t* buffer, uint16_t max_length, uint16_t* received)
         return false;
     }
 
-    uint64_t t0       = now_ms();
-    uint64_t deadline = now_ms() + _at_timeout;
+    uint64_t t0 = now_ms();
     port_send("AT+SBDRB\r");
 
-    // Read 2-byte big-endian length
     uint8_t b0 = 0, b1 = 0;
     if (!uart_read_byte(&b0, _at_timeout) ||
         !uart_read_byte(&b1, _at_timeout))
@@ -553,10 +643,9 @@ bool read_message(uint8_t* buffer, uint16_t max_length, uint16_t* received)
     }
 
     uint16_t len = (uint16_t)(((uint16_t)b0 << 8) | (uint16_t)b1);
-    if (len == 0)       { _last_error = DriverError::NO_MESSAGE_WAITING; return false; }
-    if (len > max_length) { _last_error = DriverError::READ_FAILED;      return false; }
+    if (len == 0)         { _last_error = DriverError::NO_MESSAGE_WAITING; return false; }
+    if (len > max_length) { _last_error = DriverError::READ_FAILED;        return false; }
 
-    // Read payload + verify checksum
     uint16_t computed = 0;
     for (uint16_t i = 0; i < len; i++)
     {
@@ -566,8 +655,8 @@ bool read_message(uint8_t* buffer, uint16_t max_length, uint16_t* received)
             _last_error = DriverError::UART_TIMEOUT;
             return false;
         }
-        buffer[i]  = bi;
-        computed   = (uint16_t)(computed + bi);
+        buffer[i] = bi;
+        computed  = (uint16_t)(computed + bi);
     }
 
     uint8_t cs0 = 0, cs1 = 0;
@@ -635,8 +724,6 @@ bool wake()
 
 bool abort_session()
 {
-    // On Pico we can't close/reopen the UART port like a serial port.
-    // Send escape sequence + ATH to cleanly terminate.
     port_send("+++");
     sleep_ms(100);
 
@@ -646,19 +733,16 @@ bool abort_session()
         return true;
     }
 
-    // If ATH fails, force state reset — UART stays open
     _session_active = false;
     return false;
 }
 
 // ======================================================
-// Reset — software only (no reset pin on RockBlock 9603)
+// Reset
 // ======================================================
 
 bool hardware_reset()
 {
-    // RockBlock 9603 has no hardware reset pin exposed
-    // Fall through to software reset
     return software_reset();
 }
 

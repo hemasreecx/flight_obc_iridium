@@ -59,8 +59,13 @@ pico_enable_stdio_usb(obc_flight 1)
 target_link_libraries(obc_flight
         pico_stdlib
         hardware_i2c
+        hardware_uart      # ← ADD THIS
+        hardware_gpio      # ← ADD THIS
         hardware_timer
-        hardware_irq)
+        hardware_irq
+        hardware_flash     # ← ADD THIS — needed for CalibStore
+        hardware_sync      # ← ADD THIS — needed for CalibStore
+)
 
 # Add the standard include files to the build
 target_include_directories(obc_flight PRIVATE
