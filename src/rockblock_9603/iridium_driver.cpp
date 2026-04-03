@@ -399,10 +399,6 @@ bool write_message(const uint8_t* data, uint16_t length)
     return false;
 }
 
-// ======================================================
-// Session
-// ======================================================
-
 static SbdixResult attempt_session_ex()
 {
     SbdixResult res  = {};
@@ -530,10 +526,6 @@ SessionResult start_session()
     }
 }
 
-// ======================================================
-// Messaging — MT
-// ======================================================
-
 bool message_available()
 {
     if (!_initialized)
@@ -647,10 +639,6 @@ bool clear_buffers()
     return send_at_retry("AT+SBDD2");
 }
 
-// ======================================================
-// Power management
-// ======================================================
-
 bool sleep()
 {
     if (!_initialized)
@@ -677,9 +665,6 @@ bool wake()
     return true;
 }
 
-// ======================================================
-// Session control
-// ======================================================
 
 bool abort_session()
 {
@@ -696,9 +681,6 @@ bool abort_session()
     return false;
 }
 
-// ======================================================
-// Reset
-// ======================================================
 
 bool hardware_reset()
 {
@@ -710,9 +692,6 @@ bool software_reset()
     return send_at_retry("ATZ");
 }
 
-// ======================================================
-// Error handling
-// ======================================================
 
 DriverError last_error() { return _last_error; }
 
