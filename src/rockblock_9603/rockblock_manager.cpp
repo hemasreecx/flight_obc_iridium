@@ -8,33 +8,22 @@
 namespace rockblock_manager
 {
 
-// ======================================================
-// Retry config
-// ======================================================
-
 static constexpr uint8_t  TX_MAX_RETRIES       = 3;
 static constexpr uint32_t TX_RETRY_DELAY_MS    = 2000;
-static constexpr uint32_t WAKE_SETTLE_MS       = 2000;
-static constexpr uint32_t WRITE_RETRY_DELAY_MS = 1000;
+static constexpr uint32_t WAKE_SETTLE_MS       = 2000;  // wake 2 sec after waking modem to allow it to stabilize before we try to send data
+static constexpr uint32_t WRITE_RETRY_DELAY_MS = 1000; // wait before trying write
 
-// ======================================================
-// Time helper
-// ======================================================
 
 static uint32_t monotonic_ms()
 {
     return to_ms_since_boot(get_absolute_time());
 }
 
-// ======================================================
-// Internal state
-// ======================================================
-
 static bool         _initialized         = false;
-static bool         _modem_sleeping      = false;
+static bool         _modem_sleeping      = false; // tracking the power state
 static ManagerState _state               = ManagerState::IDLE;
 static ManagerError _last_error          = ManagerError::OK;
-static uint8_t      _last_session_result = 0;
+static uint8_t      _last_session_result = 0; // result from SBDIX
 
 static uint8_t  _mt_buffer[iridium_driver::MAX_SBD_PAYLOAD];
 static uint16_t _mt_length    = 0;
@@ -42,10 +31,6 @@ static bool     _mt_available = false;
 
 static uint8_t  _payload[iridium_driver::MAX_SBD_PAYLOAD];
 static uint16_t _payload_size = 0;
-
-// ======================================================
-// wake_and_verify  (unchanged)
-// ======================================================
 
 static bool wake_and_verify()
 {
@@ -69,10 +54,6 @@ static bool wake_and_verify()
     printf("[rbmgr] modem alive\n");
     return true;
 }
-
-// ======================================================
-// transmit_payload  (unchanged)
-// ======================================================
 
 static bool transmit_payload()
 {
@@ -120,7 +101,7 @@ static bool transmit_payload()
         printf("[rbmgr] session result: %d\n", (int)result);
 
         if (result == iridium_driver::SessionResult::SUCCESS ||
-            result == iridium_driver::SessionResult::SUCCESS_MT_TOO_BIG ||
+            result == iridium_driver::SessionResult::SUCCESS_MT_TOO_BIG || // incoming message is too big
             result == iridium_driver::SessionResult::SUCCESS_LOCATION_REJECTED)
         {
             if (iridium_driver::message_available())
@@ -170,9 +151,6 @@ static bool transmit_payload()
     return false;
 }
 
-// ======================================================
-// Init
-// ======================================================
 
 bool init(const iridium_driver::Config& cfg)
 {
@@ -209,9 +187,6 @@ void shutdown()
     _state          = ManagerState::IDLE;
 }
 
-// ======================================================
-// force_transmit  (unchanged)
-// ======================================================
 
 bool force_transmit(const log_format::Record& rec)
 {
@@ -226,10 +201,6 @@ bool force_transmit(const log_format::Record& rec)
 
     return transmit_payload();
 }
-
-// ======================================================
-// transmit_records  (NEW — called by Core 1)
-// ======================================================
 
 bool transmit_records(const log_format::Record* records, uint8_t count)
 {
@@ -258,18 +229,12 @@ bool transmit_records(const log_format::Record* records, uint8_t count)
     return ok;
 }
 
-// ======================================================
-// Status
-// ======================================================
 
 bool         busy()                { return iridium_driver::is_busy(); }
 ManagerState state()               { return _state; }
 uint32_t     last_tx_ms()          { return monotonic_ms(); } // Core 1 owns timing now
 uint8_t      last_session_result() { return _last_session_result; }
 
-// ======================================================
-// MT message handling
-// ======================================================
 
 bool command_available()
 {
@@ -289,9 +254,7 @@ bool read_command(uint8_t*  buffer,
     return true;
 }
 
-// ======================================================
-// Error handling
-// ======================================================
+
 
 ManagerError last_error() { return _last_error; }
 
