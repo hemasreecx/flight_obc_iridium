@@ -50,7 +50,7 @@ enum class SignalQuality : uint8_t
 enum class SessionResult : uint8_t
 {
     SUCCESS                   = 0,    // MO transferred successfully
-    SUCCESS_MT_TOO_BIG        = 1,    // MO ok, MT message too big to transfer
+    SUCCESS_mobile_originated_TOO_BIG        = 1,    // MO ok, MT message too big to transfer
     SUCCESS_LOCATION_REJECTED = 2,    // MO ok, Location Update not accepted
     // 3–4: reserved success
 

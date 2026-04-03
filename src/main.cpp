@@ -25,10 +25,6 @@
 #include "rockblock_9603/iridium_driver.hpp"
 #include "rockblock_9603/rockblock_manager.hpp"
 
-/* ============================================================
-   SYSTEM CONFIGURATION
-   ============================================================ */
-
 #define SYSTEM_DEBUG            1
 #define LOGGER_RAW_MODE         0
 
@@ -42,12 +38,10 @@
 #define CALIB_SAMPLES           560
 #define CALIB_SAMPLE_DELAY_MS   5
 #define RECALIB_PROMPT_MS       5000
-
+#define KX134_DEBUG     0  // IMU driver debug  
+#define QMC5883L_DEBUG  0  // MAG driver debug
 #define LED_PIN                 25
 
-/* ============================================================
-   DEBUG MACRO
-   ============================================================ */
 
 #if SYSTEM_DEBUG
 #define DEBUG_PRINT(...) do { printf(__VA_ARGS__); fflush(stdout); } while(0)
@@ -55,9 +49,6 @@
 #define DEBUG_PRINT(...)
 #endif
 
-/* ============================================================
-   LOGGER OBJECTS
-   ============================================================ */
 
 #if LOGGER_RAW_MODE
 static DataLogger    kx_logger(LoggerMode::RAW);
@@ -67,9 +58,6 @@ static DataLogger    kx_logger(LoggerMode::CONVERTED);
 static MagDataLogger qmc_logger(MagLoggerMode::CONVERTED);
 #endif
 
-/* ============================================================
-   GLOBAL SENSOR OBJECTS
-   ============================================================ */
 
 static KX134          imu(KX134_I2C_BUS, KX134_ADDRESS);
 static QMC5883L       mag(MAG_I2C_BUS);
@@ -85,9 +73,6 @@ static const QMC5883L_Config MAG_CONFIG = {
     .pointer_roll_over     = true
 };
 
-/* ============================================================
-   RING BUFFER  (shared between Core 0 and Core 1)
-   ============================================================ */
 
 static constexpr uint8_t RING_SIZE = 6;   // 2 packets worth
 
@@ -411,14 +396,19 @@ static void fill_record(log_format::Record& r)
         r.acc3_z = kx_raw.z;
     }
 
-    // ── REAL: QMC5883L ────────────────────────────────────────
     const MagSample& s = mag_acq.getLatestSample();
-    r.mag_x           = (int16_t)(s.x_gauss    * 1000.0f);
-    r.mag_y           = (int16_t)(s.y_gauss    * 1000.0f);
-    r.mag_z           = (int16_t)(s.z_gauss    * 1000.0f);
-    r.imu_temperature = (int16_t)(s.temperature * 100.0f);
+    QMC5883L_Raw mag_raw;
+    if(mag.readRaw(mag_raw))
+    {
+        r.mag_x = mag_raw.x;
+        r.mag_y = mag_raw.y;
+        r.mag_z = mag_raw.z;
 
-    // ── SIMULATED: GPS ────────────────────────────────────────
+    }
+    // r.mag_x           = (int16_t)(s.x_gauss    * 1000.0f); // if we need converted ones in gauss
+    // r.mag_y           = (int16_t)(s.y_gauss    * 1000.0f);
+    // r.mag_z           = (int16_t)(s.z_gauss    * 1000.0f);
+    r.imu_temperature = (int16_t)(s.temperature * 100.0f);
     r.gps_time  = to_ms_since_boot(get_absolute_time()) / 1000;
     r.latitude  = rng_range(280000000, 280100000);
     r.longitude = rng_range(770000000, 770100000);

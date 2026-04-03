@@ -25,9 +25,9 @@ static ManagerState _state               = ManagerState::IDLE;
 static ManagerError _last_error          = ManagerError::OK;
 static uint8_t      _last_session_result = 0; // result from SBDIX
 
-static uint8_t  _mt_buffer[iridium_driver::MAX_SBD_PAYLOAD];
-static uint16_t _mt_length    = 0;
-static bool     _mt_available = false;
+static uint8_t  _mobile_originated_buffer[iridium_driver::MAX_SBD_PAYLOAD];
+static uint16_t _mobile_originated_length    = 0;
+static bool     _mobile_originated_available = false;
 
 static uint8_t  _payload[iridium_driver::MAX_SBD_PAYLOAD];
 static uint16_t _payload_size = 0;
@@ -101,17 +101,17 @@ static bool transmit_payload()
         printf("[rbmgr] session result: %d\n", (int)result);
 
         if (result == iridium_driver::SessionResult::SUCCESS ||
-            result == iridium_driver::SessionResult::SUCCESS_MT_TOO_BIG || // incoming message is too big
+            result == iridium_driver::SessionResult::SUCCESS_mobile_originated_TOO_BIG || // incoming message is too big
             result == iridium_driver::SessionResult::SUCCESS_LOCATION_REJECTED)
         {
             if (iridium_driver::message_available())
             {
                 uint16_t received = 0;
                 if (iridium_driver::read_message(
-                        _mt_buffer, sizeof(_mt_buffer), &received))
+                        _mobile_originated_buffer, sizeof(_mobile_originated_buffer), &received))
                 {
-                    _mt_length    = received;
-                    _mt_available = true;
+                    _mobile_originated_length    = received;
+                    _mobile_originated_available = true;
                     printf("[rbmgr] MT message received: %d bytes\n", received);
                 }
             }
@@ -161,8 +161,8 @@ bool init(const iridium_driver::Config& cfg)
     }
 
     _modem_sleeping      = false;
-    _mt_available        = false;
-    _mt_length           = 0;
+    _mobile_originated_available        = false;
+    _mobile_originated_length           = 0;
     _payload_size        = 0;
     _last_session_result = 0;
     _state               = ManagerState::IDLE;
@@ -238,19 +238,19 @@ uint8_t      last_session_result() { return _last_session_result; }
 
 bool command_available()
 {
-    return _mt_available;
+    return _mobile_originated_available;
 }
 
 bool read_command(uint8_t*  buffer,
                   uint16_t  max_length,
                   uint16_t* received)
 {
-    if (!_mt_available)          return false;
-    if (_mt_length > max_length) return false;
+    if (!_mobile_originated_available)          return false;
+    if (_mobile_originated_length > max_length) return false;
 
-    memcpy(buffer, _mt_buffer, _mt_length);
-    *received     = _mt_length;
-    _mt_available = false;
+    memcpy(buffer, _mobile_originated_buffer, _mobile_originated_length);
+    *received     = _mobile_originated_length;
+    _mobile_originated_available = false;
     return true;
 }
 

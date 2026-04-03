@@ -69,7 +69,7 @@ static bool uart_read_line(char* buffer, size_t max_len, uint32_t timeout_ms)
 static Config      _cfg;
 static bool        _initialized     = false;
 static bool        _session_active  = false;
-static bool        _mt_pending      = false;
+static bool        _mobile_originated_pending      = false;
 static uint32_t    _session_timeout = DEFAULT_SESSION_TIMEOUT_MS;
 static uint32_t    _at_timeout      = DEFAULT_AT_TIMEOUT_MS;
 static DriverError _last_error      = DriverError::OK;
@@ -238,7 +238,7 @@ while (now_ms() < test_end)
     clear_buffers();
 
     _session_active = false;
-    _mt_pending     = false;
+    _mobile_originated_pending     = false;
     _last_error     = DriverError::OK;
     _initialized    = true;
     return true;
@@ -246,7 +246,7 @@ while (now_ms() < test_end)
 // these are high level check functions 
 bool is_alive()           { return send_at("AT"); }
 bool is_busy()            { return _session_active; }
-bool ring_alert_pending() { return _mt_pending; }
+bool ring_alert_pending() { return _mobile_originated_pending; }
 
 
 SignalQuality signal_quality()
@@ -406,7 +406,7 @@ static SbdixResult attempt_session_ex()
     res.mo_status    = 32;
 
     _session_active  = true;
-    _mt_pending      = false;
+    _mobile_originated_pending      = false;
 
     uint64_t t0 = now_ms();
     printf("[SBDIX] sending AT+SBDIX (timeout=%ums)...\n",
@@ -437,7 +437,7 @@ static SbdixResult attempt_session_ex()
         {
             res.valid = true;
             if (res.mt_status == 1 || res.mt_status == 2)
-                _mt_pending = true;
+                _mobile_originated_pending = true;
 
             printf("[SBDIX] mo=%d momsn=%d mt=%d mt_len=%d "
                    "mt_q=%d fields=%d (%llums)\n",
@@ -501,7 +501,7 @@ SessionResult start_session()
     switch (res.mo_status)
     {
         case 0:  return SessionResult::SUCCESS;
-        case 1:  return SessionResult::SUCCESS_MT_TOO_BIG;
+        case 1:  return SessionResult::SUCCESS_mobile_originated_TOO_BIG;
         case 2:  return SessionResult::SUCCESS_LOCATION_REJECTED;
         case 10: return SessionResult::TIMEOUT_GSS;
         case 11: return SessionResult::MO_QUEUE_FULL;
@@ -567,9 +567,9 @@ bool message_available()
     printf("[SBDSX] mt_flag=%d (%llums)\n",
            mt_flag, (unsigned long long)(now_ms() - t0));
 
-    _mt_pending = (mt_flag != 0);
+    _mobile_originated_pending = (mt_flag != 0);
     _last_error = DriverError::OK;
-    return _mt_pending;
+    return _mobile_originated_pending;
 }
 
 bool read_message(uint8_t* buffer, uint16_t max_length, uint16_t* received)
@@ -629,7 +629,7 @@ bool read_message(uint8_t* buffer, uint16_t max_length, uint16_t* received)
            (unsigned)len, (unsigned long long)(now_ms() - t0));
 
     *received   = len;
-    _mt_pending = false;
+    _mobile_originated_pending = false;
     _last_error = DriverError::OK;
     return true;
 }
