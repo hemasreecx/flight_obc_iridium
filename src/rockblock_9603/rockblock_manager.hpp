@@ -10,7 +10,7 @@ constexpr uint32_t DEFAULT_TX_INTERVAL_MS = 7000;
 
 constexpr uint8_t MAX_RECORDS_PER_PACKET =
     iridium_driver::MAX_SBD_PAYLOAD / log_format::RECORD_SIZE;
-// = 340 / 91 = 3
+// = 340 / 91 = 3  (actually 273 / 91 = 3)
 
 enum class ManagerState : uint8_t
 {
@@ -35,10 +35,11 @@ void shutdown();
 
 bool force_transmit(const log_format::Record& rec);
 
-// Call every loop — handles timing, buffering, sleep/wake
-bool task(const log_format::Record& rec);
-
-void set_tx_interval_ms(uint32_t ms);
+// Called by Core 1 with exactly MAX_RECORDS_PER_PACKET records.
+// Packs them into _payload and calls transmit_payload().
+// Returns true on success, false on all retries exhausted.
+// Packet is always dropped after this call regardless of result.
+bool transmit_records(const log_format::Record* records, uint8_t count);
 
 // ── Status ───────────────────────────────────────────────
 bool         busy();

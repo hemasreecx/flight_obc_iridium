@@ -65,6 +65,7 @@ target_link_libraries(obc_flight
         hardware_irq
         hardware_flash     # ← ADD THIS — needed for CalibStore
         hardware_sync      # ← ADD THIS — needed for CalibStore
+        pico_multicore
 )
 
 # Add the standard include files to the build

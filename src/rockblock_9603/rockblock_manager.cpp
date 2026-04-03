@@ -16,7 +16,6 @@ static constexpr uint8_t  TX_MAX_RETRIES       = 3;
 static constexpr uint32_t TX_RETRY_DELAY_MS    = 2000;
 static constexpr uint32_t WAKE_SETTLE_MS       = 2000;
 static constexpr uint32_t WRITE_RETRY_DELAY_MS = 1000;
-static constexpr uint32_t BOOT_DELAY_MS        = 5000;
 
 // ======================================================
 // Time helper
@@ -36,8 +35,6 @@ static bool         _modem_sleeping      = false;
 static ManagerState _state               = ManagerState::IDLE;
 static ManagerError _last_error          = ManagerError::OK;
 static uint8_t      _last_session_result = 0;
-static uint32_t     _tx_interval_ms      = DEFAULT_TX_INTERVAL_MS;
-static uint32_t     _last_tx_ms          = 0;
 
 static uint8_t  _mt_buffer[iridium_driver::MAX_SBD_PAYLOAD];
 static uint16_t _mt_length    = 0;
@@ -46,11 +43,8 @@ static bool     _mt_available = false;
 static uint8_t  _payload[iridium_driver::MAX_SBD_PAYLOAD];
 static uint16_t _payload_size = 0;
 
-static log_format::Record _record_buffer[MAX_RECORDS_PER_PACKET];
-static uint8_t            _buffer_count = 0;
-
 // ======================================================
-// wake_and_verify
+// wake_and_verify  (unchanged)
 // ======================================================
 
 static bool wake_and_verify()
@@ -77,7 +71,7 @@ static bool wake_and_verify()
 }
 
 // ======================================================
-// transmit_payload
+// transmit_payload  (unchanged)
 // ======================================================
 
 static bool transmit_payload()
@@ -143,7 +137,6 @@ static bool transmit_payload()
 
             iridium_driver::sleep();
             _modem_sleeping = true;
-            _last_tx_ms     = monotonic_ms();
             _last_error     = ManagerError::OK;
             _state          = ManagerState::SLEEPING;
             printf("[rbmgr] TX SUCCESS on attempt %d\n", attempt);
@@ -159,7 +152,6 @@ static bool transmit_payload()
             _modem_sleeping = true;
             _last_error     = ManagerError::SESSION_FAILED;
             _state          = ManagerState::SLEEPING;
-            _last_tx_ms     = monotonic_ms();
             return false;
         }
 
@@ -175,7 +167,6 @@ static bool transmit_payload()
     _modem_sleeping = true;
     _last_error     = ManagerError::SESSION_FAILED;
     _state          = ManagerState::SLEEPING;
-    _last_tx_ms     = monotonic_ms();
     return false;
 }
 
@@ -195,9 +186,7 @@ bool init(const iridium_driver::Config& cfg)
     _mt_available        = false;
     _mt_length           = 0;
     _payload_size        = 0;
-    _last_tx_ms          = 0;
     _last_session_result = 0;
-    _buffer_count        = 0;
     _state               = ManagerState::IDLE;
     _last_error          = ManagerError::OK;
     _initialized         = true;
@@ -221,7 +210,7 @@ void shutdown()
 }
 
 // ======================================================
-// force_transmit
+// force_transmit  (unchanged)
 // ======================================================
 
 bool force_transmit(const log_format::Record& rec)
@@ -239,49 +228,34 @@ bool force_transmit(const log_format::Record& rec)
 }
 
 // ======================================================
-// Task
+// transmit_records  (NEW — called by Core 1)
 // ======================================================
 
-bool task(const log_format::Record& rec)
+bool transmit_records(const log_format::Record* records, uint8_t count)
 {
-    if (!_initialized) return false;
-
-    uint32_t now = monotonic_ms();
-    if (now < BOOT_DELAY_MS)
-        return true;
-
-    if (_buffer_count < MAX_RECORDS_PER_PACKET)
+    if (!_initialized)
     {
-        _record_buffer[_buffer_count++] = rec;
-        printf("[rbmgr] buffered %d/%d records\n",
-               _buffer_count, MAX_RECORDS_PER_PACKET);
+        _last_error = ManagerError::NOT_INITIALIZED;
+        return false;
     }
 
-    bool buffer_full      = (_buffer_count >= MAX_RECORDS_PER_PACKET);
-    bool interval_elapsed = (_last_tx_ms == 0) ||
-                            (now - _last_tx_ms >= _tx_interval_ms);
+    if (count == 0 || records == nullptr)
+        return false;
 
-    bool should_tx = buffer_full || (interval_elapsed && _buffer_count > 0);
+    // Pack records into flat payload
+    _payload_size = (uint16_t)(count * log_format::RECORD_SIZE);
+    memcpy(_payload, records, _payload_size);
 
-    if (!should_tx)
-        return true;
+    printf("[rbmgr] transmit_records: %d records, %d bytes\n",
+           count, _payload_size);
 
-    _payload_size = (uint16_t)(_buffer_count * log_format::RECORD_SIZE);
-    memcpy(_payload, _record_buffer, _payload_size);
-
-    printf("[rbmgr] transmitting %d records (%d bytes)\n",
-           _buffer_count, _payload_size);
-
+    // Attempt TX — packet is dropped by Core 1 regardless of result
     bool ok = transmit_payload();
 
-    _buffer_count = 0;
+    if (!ok)
+        printf("[rbmgr] transmit_records: all retries failed, packet dropped\n");
 
     return ok;
-}
-
-void set_tx_interval_ms(uint32_t ms)
-{
-    _tx_interval_ms = ms;
 }
 
 // ======================================================
@@ -290,7 +264,7 @@ void set_tx_interval_ms(uint32_t ms)
 
 bool         busy()                { return iridium_driver::is_busy(); }
 ManagerState state()               { return _state; }
-uint32_t     last_tx_ms()          { return _last_tx_ms; }
+uint32_t     last_tx_ms()          { return monotonic_ms(); } // Core 1 owns timing now
 uint8_t      last_session_result() { return _last_session_result; }
 
 // ======================================================

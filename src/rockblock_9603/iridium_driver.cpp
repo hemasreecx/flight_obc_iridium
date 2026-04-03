@@ -8,18 +8,10 @@
 namespace iridium_driver
 {
 
-// ======================================================
-// Time helper
-// ======================================================
-
 static uint64_t now_ms()
 {
     return to_ms_since_boot(get_absolute_time());
 }
-
-// ======================================================
-// UART backend
-// ======================================================
 
 static uart_inst_t* _uart_inst = nullptr;
 
@@ -30,7 +22,7 @@ static bool uart_send(const uint8_t* data, size_t len, uint32_t timeout_ms)
     {
         while (!uart_is_writable(_uart_inst))
         {
-            if (now_ms() >= deadline) return false;
+            if (now_ms() >= deadline) return false; // timeout
             sleep_us(10);
         }
         uart_putc_raw(_uart_inst, (char)data[i]);
@@ -40,7 +32,7 @@ static bool uart_send(const uint8_t* data, size_t len, uint32_t timeout_ms)
 
 static bool uart_read_byte(uint8_t* out, uint32_t timeout_ms)
 {
-    uint64_t deadline = now_ms() + timeout_ms;
+    uint64_t deadline = now_ms() + timeout_ms; // RX TIMEOUT
     while (now_ms() < deadline)
     {
         if (uart_is_readable(_uart_inst))
@@ -62,7 +54,7 @@ static bool uart_read_line(char* buffer, size_t max_len, uint32_t timeout_ms)
     while (now_ms() < deadline)
     {
         uint8_t b = 0;
-        if (!uart_read_byte(&b, 10)) continue;
+        if (!uart_read_byte(&b, 10)) continue;  // 10ms wait per each byte 
 
         char c = (char)b;
         if (idx < max_len - 1) buffer[idx++] = c;
@@ -73,9 +65,6 @@ static bool uart_read_line(char* buffer, size_t max_len, uint32_t timeout_ms)
     return idx > 0;
 }
 
-// ======================================================
-// Internal state
-// ======================================================
 
 static Config      _cfg;
 static bool        _initialized     = false;
@@ -88,10 +77,6 @@ static DriverError _last_error      = DriverError::OK;
 static constexpr uint8_t  AT_MAX_RETRIES    = 3;
 static constexpr uint32_t AT_RETRY_DELAY_MS = 1000;
 static constexpr uint8_t  SES_MAX_RETRIES   = 1;
-
-// ======================================================
-// AT helpers
-// ======================================================
 
 static bool port_send(const char* s)
 {
@@ -147,8 +132,8 @@ static bool send_at_retry(const char* cmd,
     for (uint8_t attempt = 0; attempt < max_retries; attempt++)
     {
         if (send_at(cmd)) return true;
-        if (_last_error != DriverError::UART_TIMEOUT) break;
-        if (attempt < max_retries - 1) sleep_ms(AT_RETRY_DELAY_MS);
+        if (_last_error != DriverError::UART_TIMEOUT) break; // last_error says what went wrong the last time 
+        if (attempt < max_retries - 1) sleep_ms(AT_RETRY_DELAY_MS); // after two tries it will go into sleep mode
     }
     return false;
 }
@@ -159,9 +144,6 @@ static void set_sleep_pin(bool awake)
         gpio_put(_cfg.sleep_pin, awake ? 1 : 0);
 }
 
-// ======================================================
-// Init
-// ======================================================
 
 bool init(const Config& config)
 {
@@ -176,8 +158,7 @@ bool init(const Config& config)
         return false;
     }
 
-// ── Raw loopback test ─────────────────────────────────
-printf("[iridium] raw test — sending AT every 500ms for 5s\n");
+printf("[iridium] raw test — sending AT every 500ms for 5s\n"); // raw loop back test or bring up test
 fflush(stdout);
 
 uint64_t test_end = now_ms() + 5000;
@@ -201,13 +182,13 @@ while (now_ms() < test_end)
     {
         uint8_t b = uart_getc(_uart_inst);
         if (b >= 32 && b < 127) printf("'%c'", b);
-        else printf("[0x%02X]", b);
+        else printf("[0x%02X]", b);  // o k  \n\r -> here those char are invisible so  - 'O''K'[0x0D][0x0A]
     }
     printf("\n");
     fflush(stdout);
 }
 
-    // ── Drain boot messages ───────────────────────────────────
+    // ── Drain boot messages ─────────────────────────────────── /// removing the garbage / partial read
     sleep_ms(2000);
     uint32_t drained = 0;
     while (uart_is_readable(_uart_inst))
@@ -222,8 +203,7 @@ while (now_ms() < test_end)
     fflush(stdout);
     sleep_ms(100);
 
-    // ── Optional sleep pin ────────────────────────────────────
-    if (_cfg.sleep_pin != 0xFF)
+    if (_cfg.sleep_pin != 0xFF) // sleep pin 0 -> active, 1-> sleep mode
     {
         gpio_init(_cfg.sleep_pin);
         gpio_set_dir(_cfg.sleep_pin, GPIO_OUT);
@@ -233,6 +213,7 @@ while (now_ms() < test_end)
         sleep_ms(100);
         gpio_put(_cfg.sleep_pin, 0);
         sleep_ms(2000);
+        // this is toggling sequence -> where we  gonna try to put the modem in a known state -> as it may be partial sleep or half powered... basically reformatting the state
     }
 
     // ── Optional input pins ───────────────────────────────────
@@ -247,7 +228,7 @@ while (now_ms() < test_end)
         gpio_set_dir(_cfg.ri_pin, GPIO_IN);
     }
 
-    // ── AT handshake ──────────────────────────────────────────
+  // after uart clean, pins set, then again checking whether the AT command is working or not
     if (!send_at_retry("AT"))
     {
         _last_error = DriverError::MODEM_NOT_RESPONDING;
@@ -262,18 +243,11 @@ while (now_ms() < test_end)
     _initialized    = true;
     return true;
 }
-
-// ======================================================
-// Modem health
-// ======================================================
-
+// these are high level check functions 
 bool is_alive()           { return send_at("AT"); }
 bool is_busy()            { return _session_active; }
 bool ring_alert_pending() { return _mt_pending; }
 
-// ======================================================
-// Signal
-// ======================================================
 
 SignalQuality signal_quality()
 {
@@ -319,16 +293,10 @@ bool network_available()
     return (uint8_t)signal_quality() >= MIN_USABLE_SIGNAL;
 }
 
-// ======================================================
-// Timeout configuration
-// ======================================================
 
 void set_session_timeout_ms(uint32_t ms) { _session_timeout = ms; }
 void set_at_timeout_ms(uint32_t ms)      { _at_timeout = ms; }
 
-// ======================================================
-// Messaging — MO
-// ======================================================
 
 bool write_message(const uint8_t* data, uint16_t length)
 {

@@ -1,4 +1,6 @@
 #include "pico/stdlib.h"
+#include "pico/multicore.h"
+#include "pico/mutex.h"
 #include "hardware/i2c.h"
 #include "hardware/gpio.h"
 #include "hardware/uart.h"
@@ -42,7 +44,6 @@
 #define RECALIB_PROMPT_MS       5000
 
 #define LED_PIN                 25
-#define TX_INTERVAL_MS          20000
 
 /* ============================================================
    DEBUG MACRO
@@ -83,6 +84,18 @@ static const QMC5883L_Config MAG_CONFIG = {
     .enable_drdy_interrupt = false,
     .pointer_roll_over     = true
 };
+
+/* ============================================================
+   RING BUFFER  (shared between Core 0 and Core 1)
+   ============================================================ */
+
+static constexpr uint8_t RING_SIZE = 6;   // 2 packets worth
+
+static log_format::Record ring[RING_SIZE];
+static uint8_t            ring_head  = 0; // Core 1 reads from here
+static uint8_t            ring_tail  = 0; // Core 0 writes here
+static uint8_t            ring_count = 0;
+static mutex_t            ring_mutex;
 
 /* ============================================================
    SYSTEM STATE
@@ -354,7 +367,6 @@ static void print_record(const log_format::Record& r)
 {
     printf("---[RECORD ctr=%lu]---\n", r.counter);
 
-    // ── Real sensor fields ────────────────────────────────────
     printf("acc3:  %d, %d, %d\n",
            r.acc3_x, r.acc3_y, r.acc3_z);
     printf("mag:   %d, %d, %d\n",
@@ -362,7 +374,6 @@ static void print_record(const log_format::Record& r)
     printf("temp:  %.2f C\n",
            (double)(r.imu_temperature / 100.0f));
 
-    // ── Simulated fields ──────────────────────────────────────
     printf("gps:   time=%lu lat=%ld lon=%ld alt=%ld\n",
            r.gps_time, r.latitude, r.longitude, r.altitude);
     printf("bat:   %u mV, %d mA\n",
@@ -371,7 +382,6 @@ static void print_record(const log_format::Record& r)
            r.imu_acc_x, r.imu_acc_y, r.imu_acc_z,
            r.imu_gyro_x, r.imu_gyro_y, r.imu_gyro_z);
 
-    // ── Thermocouples ─────────────────────────────────────────
     printf("tc:    ");
     for (int i = 0; i < 20; i++)
         printf("%d ", r.thermocouples[i]);
@@ -384,8 +394,6 @@ static void print_record(const log_format::Record& r)
 
 /* ============================================================
    FILL RECORD
-   Real:      acc3_x/y/z, mag_x/y/z, imu_temperature, counter
-   Simulated: everything else
    ============================================================ */
 
 static void fill_record(log_format::Record& r)
@@ -436,6 +444,57 @@ static void fill_record(log_format::Record& r)
 }
 
 /* ============================================================
+   CORE 1 — Transmission loop
+   Runs continuously. When ring has >= 3 records, dequeues them,
+   calls transmit_records() up to 3 retries, then drops regardless.
+   ============================================================ */
+
+static void core1_entry()
+{
+    DEBUG_PRINT("[core1] transmission loop started\n");
+
+    while (true)
+    {
+        // ── Check if we have a full packet ready ──────────────
+        log_format::Record batch[rockblock_manager::MAX_RECORDS_PER_PACKET];
+        bool got_batch = false;
+
+        mutex_enter_blocking(&ring_mutex);
+        if (ring_count >= rockblock_manager::MAX_RECORDS_PER_PACKET)
+        {
+            for (uint8_t i = 0; i < rockblock_manager::MAX_RECORDS_PER_PACKET; i++)
+            {
+                batch[i]  = ring[ring_head];
+                ring_head = (ring_head + 1) % RING_SIZE;
+            }
+            ring_count -= rockblock_manager::MAX_RECORDS_PER_PACKET;
+            got_batch = true;
+        }
+        mutex_exit(&ring_mutex);
+
+        if (got_batch)
+        {
+            DEBUG_PRINT("[core1] dequeued %d records, transmitting\n",
+                        rockblock_manager::MAX_RECORDS_PER_PACKET);
+
+            // transmit_records handles up to 3 retries internally
+            bool ok = rockblock_manager::transmit_records(
+                          batch,
+                          rockblock_manager::MAX_RECORDS_PER_PACKET);
+
+            // Packet always dropped here regardless of result
+            DEBUG_PRINT("[core1] packet %s — slot cleared\n",
+                        ok ? "sent" : "dropped after max retries");
+        }
+        else
+        {
+            // Nothing to do yet — yield for a bit
+            sleep_ms(10);
+        }
+    }
+}
+
+/* ============================================================
    SYSTEM INIT
    ============================================================ */
 
@@ -445,6 +504,7 @@ static bool system_init(bool force_recalib)
 
     led_init();
     rng_init();
+    mutex_init(&ring_mutex);
 
     // ── I2C0 — KX134 ─────────────────────────────────────────
     i2c_init(KX134_I2C_BUS, I2C_SPEED_HZ);
@@ -551,7 +611,6 @@ static bool system_init(bool force_recalib)
         DEBUG_PRINT("ERROR: Iridium init failed\n");
         return false;
     }
-    rockblock_manager::set_tx_interval_ms(TX_INTERVAL_MS);
     DEBUG_PRINT("Iridium init OK\n");
 
     // ── CSV headers ───────────────────────────────────────────
@@ -565,7 +624,7 @@ static bool system_init(bool force_recalib)
 }
 
 /* ============================================================
-   MAIN LOOP
+   MAIN LOOP  (Core 0 — mission loop, runs every 1 second)
    ============================================================ */
 
 static void main_loop()
@@ -637,8 +696,22 @@ static void main_loop()
         print_record(rec);
 #endif
 
-    // ── Transmit ──────────────────────────────────────────────
-    rockblock_manager::task(rec);
+    // ── Push record to ring buffer (Core 1 will consume it) ───
+    mutex_enter_blocking(&ring_mutex);
+    if (ring_count < RING_SIZE)
+    {
+        ring[ring_tail] = rec;
+        ring_tail       = (ring_tail + 1) % RING_SIZE;
+        ring_count++;
+        DEBUG_PRINT("[core0] pushed record %lu to ring (%d/%d)\n",
+                    rec.counter, ring_count, RING_SIZE);
+    }
+    else
+    {
+        // Core 1 is behind — drop this record to protect mission loop
+        DEBUG_PRINT("[core0] ring full — record %lu dropped\n", rec.counter);
+    }
+    mutex_exit(&ring_mutex);
 
     loop_count++;
 }
@@ -673,12 +746,17 @@ int main()
         while (true) { tight_loop_contents(); }
     }
 
+    // ── Launch Core 1 transmission loop ───────────────────────
+    multicore_launch_core1(core1_entry);
+    DEBUG_PRINT("[core0] Core 1 launched\n");
+
+    // ── Core 0 mission loop — runs every 1 second ─────────────
     while (true)
     {
         if (system_initialized)
             main_loop();
 
-        sleep_ms(1);
+        sleep_ms(1000);
     }
 
     return 0;
