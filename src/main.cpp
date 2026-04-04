@@ -38,11 +38,11 @@
 #define CALIB_SAMPLES           560
 #define CALIB_SAMPLE_DELAY_MS   5
 #define RECALIB_PROMPT_MS       5000
-#define KX134_DEBUG     0  // IMU driver debug  
-#define QMC5883L_DEBUG  0  // MAG driver debug
+#define KX134_DEBUG     0    
+#define QMC5883L_DEBUG  0  
 #define LED_PIN                 25
 
-
+// SO CURRENTLY DISABLED THE K134 AND QMC LOGGING OFF AND MAINLOOP DEBUGGING ON
 #if SYSTEM_DEBUG
 #define DEBUG_PRINT(...) do { printf(__VA_ARGS__); fflush(stdout); } while(0)
 #else
@@ -82,9 +82,6 @@ static uint8_t            ring_tail  = 0; // Core 0 writes here
 static uint8_t            ring_count = 0;
 static mutex_t            ring_mutex;
 
-/* ============================================================
-   SYSTEM STATE
-   ============================================================ */
 
 static volatile bool     system_initialized    = false;
 static volatile uint32_t loop_count            = 0;
@@ -92,12 +89,7 @@ static volatile uint32_t imu_comm_errors       = 0;
 static volatile uint32_t mag_comm_errors       = 0;
 static volatile uint32_t imu_recovery_attempts = 0;
 static volatile uint32_t mag_recovery_attempts = 0;
-
-static uint32_t record_counter = 0;
-
-/* ============================================================
-   LED HELPERS
-   ============================================================ */
+static uint32_t record_counter = 0; // incremented for each new record, used to track record age in the ring buffer
 
 static void led_init()
 {
@@ -109,9 +101,7 @@ static void led_init()
 static void led_on()  { gpio_put(LED_PIN, 1); }
 static void led_off() { gpio_put(LED_PIN, 0); }
 
-/* ============================================================
-   RNG HELPERS
-   ============================================================ */
+
 
 static void rng_init()
 {
@@ -344,9 +334,6 @@ static bool wait_for_recalib_request()
     return false;
 }
 
-/* ============================================================
-   PRINT RECORD — full struct to USB serial
-   ============================================================ */
 
 static void print_record(const log_format::Record& r)
 {
@@ -357,7 +344,7 @@ static void print_record(const log_format::Record& r)
     printf("mag:   %d, %d, %d\n",
            r.mag_x, r.mag_y, r.mag_z);
     printf("temp:  %.2f C\n",
-           (double)(r.imu_temperature / 100.0f));
+           (double)(r.obc_temperature / 100.0f));
 
     printf("gps:   time=%lu lat=%ld lon=%ld alt=%ld\n",
            r.gps_time, r.latitude, r.longitude, r.altitude);
@@ -408,7 +395,7 @@ static void fill_record(log_format::Record& r)
     // r.mag_x           = (int16_t)(s.x_gauss    * 1000.0f); // if we need converted ones in gauss
     // r.mag_y           = (int16_t)(s.y_gauss    * 1000.0f);
     // r.mag_z           = (int16_t)(s.z_gauss    * 1000.0f);
-    r.imu_temperature = (int16_t)(s.temperature * 100.0f);
+    r.obc_temperature = (int16_t)(s.temperature * 100.0f);
     r.gps_time  = to_ms_since_boot(get_absolute_time()) / 1000;
     r.latitude  = rng_range(280000000, 280100000);
     r.longitude = rng_range(770000000, 770100000);

@@ -7,7 +7,7 @@
 
 
 #ifndef KX134_DEBUG
-#define KX134_DEBUG 1
+#define KX134_DEBUG 0
 #endif
 
 

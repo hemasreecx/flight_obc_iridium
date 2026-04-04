@@ -36,7 +36,7 @@ struct Record
     uint16_t battery_voltage; //sim
     int16_t  battery_current; //sim
 
-    int16_t imu_temperature; 
+    int16_t obc_temperature; 
 
     uint8_t commit;
 };
