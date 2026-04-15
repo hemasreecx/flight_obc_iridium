@@ -5,7 +5,6 @@
 
 #include "iridium_driver.hpp"
 #include "rockblock_manager.hpp"
-#endif
 
 namespace mission_manager
 {

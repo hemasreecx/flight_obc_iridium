@@ -6,30 +6,17 @@
 #include "hardware/i2c.h"
 #include "hardware/gpio.h"
 
-#include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
-
-#include "drivers/kx134/kx134.hpp"
-#include "modules/imu_acquisition.hpp"
-#include "modules/imu_conversion.hpp"
-#include "logging/kx_data_logger.hpp"
-
-
-#include "drivers/qmc5883l/qmc5883l.hpp"
-#include "modules/mag_acquisition.hpp"
-#include "modules/mag_conversion.hpp"
-#include "logging/qmc_data_logger.hpp"
-
 
 #if SYSTEM_DEBUG
 #define DBG(...) do { printf(__VA_ARGS__); fflush(stdout); } while(0)
 #else
 #define DBG(...)
-
+#endif
 
 static constexpr uint8_t  SENSOR_INIT_RETRIES   = 3;
-static constexpr uint32_t SENSOR_RETRY_DELAY_MS = 20000; // 2 sec
+static constexpr uint32_t SENSOR_RETRY_DELAY_MS = 2000;
 
 namespace sensor_manager
 {
@@ -39,17 +26,22 @@ static bool _mag_healthy       = false;
 static bool _lsm_healthy       = false;
 static bool _force_imu_recalib = false;
 static bool _force_mag_recalib = false;
-static bool _force_lsm_recalib =  false;
+static bool _force_lsm_recalib = false;
 
 static uint32_t _imu_comm_errors       = 0;
 static uint32_t _mag_comm_errors       = 0;
-static uint32_t _lsm_comm_errors       = 0;
 static uint32_t _imu_recovery_attempts = 0;
 static uint32_t _mag_recovery_attempts = 0;
-static uint32_t _lsm_recovery_attempts = 0;
 
-static KX134          _imu(KX134_I2C_BUS, KX134_I2C_ADDR);
-static IMUAcquisition _imu_acq(_imu);
+static DataLogger _kx_logger(LoggerMode::CONVERTED);
+#if SENSOR_LOG_RAW
+static MagDataLogger _qmc_logger(MagLoggerMode::PRE_CALIB);
+#else
+static MagDataLogger _qmc_logger(MagLoggerMode::CONVERTED);
+#endif
+
+static KX134          _imu(KX134_I2C_BUS, KX134_I2C_ADDR_LOW);
+static IMUAcquisition _imu_acq(_imu, _kx_logger);
 
 static const KX134_Config KX134_CFG = {
     .range                       = KX134_Range::RANGE_64G,
@@ -60,7 +52,7 @@ static const KX134_Config KX134_CFG = {
 };
 
 static QMC5883L       _mag(MAG_I2C_BUS);
-static MagAcquisition _mag_acq(_mag);
+static MagAcquisition _mag_acq(_mag, _qmc_logger);
 
 static const QMC5883L_Config MAG_CFG = {
     .range                 = QMC5883L_Range::RANGE_8G,
@@ -70,7 +62,7 @@ static const QMC5883L_Config MAG_CFG = {
     .enable_drdy_interrupt = false,
     .pointer_roll_over     = true
 };
-// need to be done for all the i2c buses 
+
 static void i2c_bus_recovery(uint8_t sda_pin, uint8_t scl_pin)
 {
     DBG("[sensor] I2C recovery SDA=%d SCL=%d\n", sda_pin, scl_pin);
@@ -89,7 +81,6 @@ static void i2c_bus_recovery(uint8_t sda_pin, uint8_t scl_pin)
     gpio_set_function(scl_pin, GPIO_FUNC_I2C);
     DBG("[sensor] I2C recovery done\n");
 }
-#endif
 
 static void run_imu_calibration(int16_t& ox, int16_t& oy, int16_t& oz)
 {
@@ -186,16 +177,11 @@ static void run_mag_calibration(int16_t& ox, int16_t& oy, int16_t& oz)
 
     _mag_acq.setHardIronOffsets(ox, oy, oz);
     float identity[9] = { 1,0,0, 0,1,0, 0,0,1 };
+    _mag_acq.setSoftIronMatrix(identity);
     MagCalibStore::save(ox, oy, oz, identity);
 
     DBG("[sensor] MAG calib done X:%d Y:%d Z:%d\n", ox, oy, oz);
 }
-
-
-// ============================================================
-// KX134 init with retry
-// ============================================================
-
 
 static bool init_kx134_with_retry()
 {
@@ -249,10 +235,6 @@ static bool init_kx134_with_retry()
     return false;
 }
 
-
-// ============================================================
-// QMC5883L init with retry
-// ============================================================
 
 static bool init_qmc_with_retry()
 {
@@ -340,8 +322,6 @@ bool init()
         DBG("[sensor] QMC FAIL — mag fields will be 0\n");
         all_ok = false;
     }
-#endif
-
     return all_ok;
 }
 
@@ -445,7 +425,7 @@ void task()
 // Real values when healthy, 0s when disabled or unhealthy
 // 
 // ============================================================
-
+//need to read the conveterwed values even for the kx134 a welll but need to store in int not float 
 void fill_record(log_format::Record& r, uint32_t counter)
 {
     log_format::init_record(r);
@@ -465,18 +445,17 @@ void fill_record(log_format::Record& r, uint32_t counter)
 
     if (_mag_healthy)
     {
-        QMC5883L_Raw raw;
-        if (_mag.readRaw(raw))
-        {
-            r.mag_x = raw.x;   // raw counts — no conversion
-            r.mag_y = raw.y;
-            r.mag_z = raw.z;
-        }
-        // readRaw fail → stays 0
-
-        // Temperature still from acquisition (only source)
         const MagSample& s = _mag_acq.getLatestSample();
-        r.obc_temperature = (int16_t)(s.temperature * 100.0f);
+#if SENSOR_LOG_RAW
+        r.mag_x = s.raw_x;
+        r.mag_y = s.raw_y;
+        r.mag_z = s.raw_z;
+#else
+        r.mag_x = static_cast<int16_t>(s.x_gauss * 1000.0f);
+        r.mag_y = static_cast<int16_t>(s.y_gauss * 1000.0f);
+        r.mag_z = static_cast<int16_t>(s.z_gauss * 1000.0f);
+#endif
+        r.obc_temperature = (int16_t)(s.temperature * 100.0f); // need to change with lsm temperature  as obc temperature
     }
 
 
@@ -523,5 +502,5 @@ bool lsm_healthy() {return _lsm_healthy; }
 // is there anyway i can get the same for ina as welll?
 void request_imu_recalib() { _force_imu_recalib = true; }
 void request_mag_recalib() { _force_mag_recalib = true; }
-bool request_lsm_recalib() {_force_lsm_recalib =  true;  }
+void request_lsm_recalib() { _force_lsm_recalib = true; }
 } // namespace sensor_manager

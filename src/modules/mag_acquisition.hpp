@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include "qmc5883l.hpp"
 #include "mag_conversion.hpp"
-#include "data_logger.hpp"   // MovingAverage + MagSample + MagDataLogger
+#include "qmc_data_logger.hpp"   // MagMovingAverage + MagSample + MagDataLogger
 
 // ── Calibration structs ───────────────────────────────────────────────────────
 
@@ -130,7 +130,7 @@ private:
      *        Only called in CONVERTED mode.
      *        Populates _latest.
      */
-    bool readAndProcess();
+    bool readAndProcess(const QMC5883L_Raw& raw);
 
     /**
      * @brief Apply hard-iron offset + soft-iron matrix to raw counts.
@@ -152,9 +152,9 @@ private:
 
     MagConversion _converter;   // counts → Gauss, heading
 
-    MovingAverage _filter_x;    // one filter per axis — independent
-    MovingAverage _filter_y;
-    MovingAverage _filter_z;
+    MagMovingAverage _filter_x;    // one filter per axis — independent
+    MagMovingAverage _filter_y;
+    MagMovingAverage _filter_z;
 
     MagSample     _latest;      // last fully-processed sample (CONVERTED mode)
 

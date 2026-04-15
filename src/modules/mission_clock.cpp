@@ -17,7 +17,7 @@ static uint32_t boot_ms()
 
 bool init()
 {
-    s0        = persistent_store::get_mission_time_s();
+    s0        = 0;
     ms0       = boot_ms();
     last_save = now_seconds();
     return true;
@@ -42,13 +42,7 @@ uint32_t millis_since_boot()
 
 void maybe_save()
 {
-    uint32_t t = now_seconds();
-    if (t - last_save >= 10u)
-    {
-        last_save = t;
-        persistent_store::set_mission_time_s(t);
-        persistent_store::save();
-    }
+    last_save = now_seconds();
 }
 
 } 

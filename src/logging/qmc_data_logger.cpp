@@ -1,4 +1,4 @@
-#include "../logging/data_logger.hpp"
+#include "../logging/qmc_data_logger.hpp"
 #include "pico/stdlib.h"
 #include "hardware/flash.h"
 #include "hardware/sync.h"

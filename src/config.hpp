@@ -24,7 +24,7 @@
 
 #define IRIDIUM_TX_INTERVAL_MS  20000
 
-/ ── Sensor addresses ──────────────────────────────────────────
+// -- Sensor addresses ---------------------------------------------------------
 
 #define KX134_I2C_ADDR_LOW      0x1E
 #define KX134_I2C_ADDR_HIGH     0x1F
@@ -36,7 +36,6 @@
 
 #define MAX_COMM_ERRORS         10
 #define MAX_RECOVERY_ATTEMPTS   3
-
 #define KX134_CALIB_SAMPLES     1000
 #define KX134_CALIB_DELAY_MS    5
 #define MAG_CALIB_SAMPLES       1000

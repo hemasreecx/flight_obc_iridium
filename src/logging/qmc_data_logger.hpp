@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 /* ============================================================
-   MovingAverage
+  MagMovingAverage
    Simple ring-buffer moving average filter.
    One instance per sensor axis — X, Y, Z filtered independently
    so noise on one axis does not corrupt the others.
@@ -19,14 +19,14 @@
    reset() must be called whenever calibration offsets change
    so stale pre-calibration samples are flushed from the buffer.
    ============================================================ */
-class MovingAverage
+class MagMovingAverage
 {
 public:
     // Maximum allowed window size — buffer is sized to this.
     // Passing window > MAX_WINDOW clamps to MAX_WINDOW safely.
     static constexpr uint8_t MAX_WINDOW = 32;
 
-    MovingAverage(uint8_t window)
+    MagMovingAverage(uint8_t window)
         : _window(window < MAX_WINDOW ? window : MAX_WINDOW),
           _sum(0.0f), _count(0), _index(0)
     {
@@ -76,6 +76,9 @@ private:
    ============================================================ */
 struct MagSample
 {
+    int16_t  raw_x;         // latest raw X counts from sensor
+    int16_t  raw_y;         // latest raw Y counts from sensor
+    int16_t  raw_z;         // latest raw Z counts from sensor
     float    x_gauss;       // calibrated + filtered X field (Gauss)
     float    y_gauss;       // calibrated + filtered Y field (Gauss)
     float    z_gauss;       // calibrated + filtered Z field (Gauss)

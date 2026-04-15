@@ -30,7 +30,6 @@ loop:
 
 #include "iridium_driver.hpp"
 #include "rockblock_manager.hpp"
-#endif
 
 #if SYSTEM_DEBUG
 #define DBG(...) do { printf(__VA_ARGS__); fflush(stdout); } while(0)
@@ -47,8 +46,6 @@ namespace mission_manager
 
 static Phase    _current_phase = Phase::NONE;
 static uint32_t _counter       = 0;
-static uint32_t _boot_ms       = 0;
-
 
 static log_format::Record _latest_record = {};
 
@@ -56,14 +53,9 @@ static log_format::Record _latest_record = {};
 // Time helpers
 // ============================================================
 
-static uint32_t elapsed_ms()
-{
-    return to_ms_since_boot(get_absolute_time()) - _boot_ms;
-}
-
 static uint32_t elapsed_s()
 {
-    return elapsed_ms() / 1000;
+    return mission::mission_clock::now_seconds();
 }
 
 // ============================================================
@@ -127,8 +119,7 @@ static void print_record(const log_format::Record& r)
            "acc=%d,%d,%d "
            "mag=%d,%d,%d "
            "temp=%.2f "
-           "bat=%umV "
-           "sd=%s\n",
+           "bat=%umV\n",
            phase_name(_current_phase),
            r.counter,
            r.acc3_x, r.acc3_y, r.acc3_z,
@@ -138,20 +129,17 @@ static void print_record(const log_format::Record& r)
 }
 static void handle_iridium()
 {
-    bool sd_ok = _sd_healthy;
+    static uint32_t last_tx_ms = 0;
+    const uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+    if ((now_ms - last_tx_ms) < IRIDIUM_TX_INTERVAL_MS)
+        return;
 
-    if (sd_ok)
+    last_tx_ms = now_ms;
+    bool tx_ok = rockblock_manager::force_transmit(_latest_record);
+    if (!tx_ok)
     {
-        bool tx_ok = rockblock_manager::transmit_next();
-
-        if (!tx_ok)
-        {
-            DBG("[mission] Iridium file TX failed"
-                " — falling back to live record\n");
-            rockblock_manager::force_transmit(_latest_record);
-        }
+        DBG("[mission] Iridium live TX failed\n");
     }
-    
 }
 // ============================================================
 // Recalibration prompt
@@ -187,10 +175,10 @@ static bool wait_for_recalib_request()
 
 bool init()
 {
-    _boot_ms       = to_ms_since_boot(get_absolute_time());
     _current_phase = Phase::NONE;
     _counter       = 0;
-    _sd_healthy    = false;
+
+    mission::mission_clock::init();
 
     DBG("[mission] ========================\n");
     DBG("[mission] OBC FLIGHT SYSTEM BOOT\n");
@@ -228,8 +216,6 @@ bool init()
     }
     else
     {
-        rockblock_manager::set_tx_interval_ms(
-            IRIDIUM_TX_INTERVAL_MS);
         DBG("[mission] Iridium OK\n");
     }
 
@@ -280,6 +266,7 @@ void task()
     DBG("[mission] phase check done\n");
     handle_iridium();
     DBG("[mission] iridium done\n");
+}
 
 // ============================================================
 // shutdown()

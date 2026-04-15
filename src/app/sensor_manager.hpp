@@ -35,17 +35,15 @@
 #include "config.hpp"
 #include "log_format.hpp"
 
-#include "drivers/kx134/kx134.hpp"
+#include "kx134.hpp"
 #include "modules/imu_acquisition.hpp"
 #include "modules/imu_conversion.hpp"
 #include "logging/kx_data_logger.hpp"   // CalibStore lives here
-#endif
 
-#include "drivers/qmc5883l/qmc5883l.hpp"
+#include "qmc5883l.hpp"
 #include "modules/mag_acquisition.hpp"
 #include "modules/mag_conversion.hpp"
 #include "logging/qmc_data_logger.hpp"  // MagCalibStore + MagSample live here
-#endif
 
 namespace sensor_manager
 {

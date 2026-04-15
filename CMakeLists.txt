@@ -37,15 +37,23 @@ pico_sdk_init()
 
 add_executable(obc_flight  
                 src/app/main.cpp
+                src/app/mission_manager.cpp
+                src/app/sensor_manager.cpp
                 src/app/system_init.cpp
+                src/drivers/ina260.cpp
                 src/drivers/kx134.cpp
+                src/drivers/LSM6DSV80X.cpp
                 src/drivers/qmc5883l.cpp
                 src/logging/kx_data_logger.cpp
+                src/logging/ls_data_logger.cpp
                 src/logging/qmc_data_logger.cpp
                 src/modules/imu_acquisition.cpp
                 src/modules/imu_conversion.cpp
+                src/modules/ls_acquisition.cpp
+                src/modules/ls_conversion.cpp
                 src/modules/mag_acquisition.cpp
                 src/modules/mag_conversion.cpp
+                src/modules/mission_clock.cpp
                 src/rockblock_9603/iridium_driver.cpp
                 src/rockblock_9603/rockblock_manager.cpp)
 

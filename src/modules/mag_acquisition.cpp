@@ -1,5 +1,5 @@
 #include "../modules/mag_acquisition.hpp"
-#include "../logging/data_logger.hpp"
+#include "../logging/qmc_data_logger.hpp"
 #include "pico/stdlib.h"
 #include <cmath>      // atan2f, M_PI
 #include <cstring>    // memcpy
@@ -99,7 +99,7 @@ QMC5883L_Status MagAcquisition::task()
     }
 
     // ── CONVERTED — full pipeline ─────────────────────────────────────────────
-    if (!readAndProcess())
+    if (!readAndProcess(raw))
         return QMC5883L_Status::READ_ERROR;
 
     _logger.log(_latest);
@@ -159,24 +159,19 @@ void MagAcquisition::resetCounters()
 
 // ── Private: readAndProcess() — CONVERTED mode only ───────────────────────────
 
-bool MagAcquisition::readAndProcess()
+bool MagAcquisition::readAndProcess(const QMC5883L_Raw& raw)
 {
-    // ── 1. Read raw counts ────────────────────────────────────────────────────
-    QMC5883L_Raw raw;
-    if (!_sensor.readRaw(raw))
-        return false;
-
-    // ── 2. Apply hard-iron + soft-iron calibration ────────────────────────────
+    // ── 1. Apply hard-iron + soft-iron calibration ────────────────────────────
     float cx, cy, cz;
     applyCalibration(raw.x, raw.y, raw.z, cx, cy, cz);
 
-    // ── 3. Convert calibrated counts → Gauss ──────────────────────────────────
+    // ── 2. Convert calibrated counts → Gauss ──────────────────────────────────
     // ±8G range: 3000 LSB per Gauss → divide by 3000
     float gx = _converter.toGauss(cx);
     float gy = _converter.toGauss(cy);
     float gz = _converter.toGauss(cz);
 
-    // ── 4. Moving-average filter — one per axis ───────────────────────────────
+    // ── 3. Moving-average filter — one per axis ───────────────────────────────
     // Window = 8 samples at 50Hz = ~160ms smoothing.
     // Each axis filtered independently so noise on one axis
     // does not corrupt the others.
@@ -184,7 +179,7 @@ bool MagAcquisition::readAndProcess()
     float fy = _filter_y.update(gy);
     float fz = _filter_z.update(gz);
 
-    // ── 5. Compass heading from filtered XY ───────────────────────────────────
+    // ── 4. Compass heading from filtered XY ───────────────────────────────────
     // atan2(y, x) gives angle from +X axis in [-π, +π] radians.
     // Shifted to [0°, 360°] for compass convention.
     // NOTE: assumes sensor mounted flat (XY plane = horizontal).
@@ -194,14 +189,15 @@ bool MagAcquisition::readAndProcess()
     if (heading < 0.0f)
         heading += 360.0f;
 
-    // ── 6. Temperature + OBC offset ───────────────────────────────────────────
+    // ── 5. Temperature + OBC offset ───────────────────────────────────────────
     // Raw reading is uncalibrated. _temp_offset corrects to actual board temp.
     // offset = actual_temp(thermal camera) - raw_reading
     float temp = 0.0f;
-    _sensor.readTemperature(temp);
+    if (!_sensor.readTemperature(temp))
+        return false;
     temp += _temp_offset;
 
-    // ── 7. Status flags ───────────────────────────────────────────────────────
+    // ── 6. Status flags ───────────────────────────────────────────────────────
     bool overflow     = _sensor.hasOverflow();
     bool data_skipped = _sensor.hasDataSkipped();
 
@@ -209,7 +205,10 @@ bool MagAcquisition::readAndProcess()
     if (data_skipped) _skipped_count++;
     _sample_count++;
 
-    // ── 8. Pack into _latest ──────────────────────────────────────────────────
+    // ── 7. Pack into _latest ──────────────────────────────────────────────────
+    _latest.raw_x        = raw.x;
+    _latest.raw_y        = raw.y;
+    _latest.raw_z        = raw.z;
     _latest.x_gauss      = fx;
     _latest.y_gauss      = fy;
     _latest.z_gauss      = fz;
