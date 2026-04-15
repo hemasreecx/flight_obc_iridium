@@ -36,7 +36,8 @@ pico_sdk_init()
 # Add executable. Default name is the project name, version 0.1
 
 add_executable(obc_flight  
-                src/main.cpp
+                src/app/main.cpp
+                src/app/system_init.cpp
                 src/drivers/kx134.cpp
                 src/drivers/qmc5883l.cpp
                 src/logging/kx_data_logger.cpp
