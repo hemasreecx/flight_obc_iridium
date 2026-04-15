@@ -12,9 +12,6 @@
 // Enable/disable low-G accelerometer path at compile time
 #define LSM6DSV80X_ENABLE_LOW_G  0   // Set to 1 to re-enable low-G
 
-#define LSM6DSV80X_I2C_ADDR_LOW     0x6A   // SA0 = 0
-#define LSM6DSV80X_I2C_ADDR_HIGH    0x6B   // SA0 = 1
-#define LSM6DSV80X_WHO_AM_I_VALUE   0x73
 
 // ─── Register Map ─────────────────────────────────────────────────────────────
 

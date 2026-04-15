@@ -33,8 +33,8 @@ struct Record
     int16_t mag_y;
     int16_t mag_z;
 
-    uint16_t battery_voltage; //sim
-    int16_t  battery_current; //sim
+    uint16_t battery_voltage; 
+    int16_t  battery_current;
 
     int16_t obc_temperature; 
 

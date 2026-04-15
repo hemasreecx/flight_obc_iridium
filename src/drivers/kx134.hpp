@@ -11,9 +11,6 @@
 #endif
 
 
-#define KX134_I2C_ADDR_LOW      0x1E
-#define KX134_I2C_ADDR_HIGH     0x1F
-#define KX134_WHO_AM_I_VALUE    0x46
 
 enum class KX134_Register : uint8_t
 {

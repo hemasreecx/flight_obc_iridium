@@ -12,6 +12,16 @@
 #define MAG_SDA_PIN      10
 #define MAG_SCL_PIN      11
 
+#define LS_I2C_BUS      i2c1
+#define LS_SDA_PIN       26
+#define LS_SCL_PIN       27
+
+#define INA260_I2C_BUS      i2c1
+#define INA260_SDA_PIN      14
+#define INA260_SCL_PIN      15
+#define INA260_EN           22
+
+
 // ── UART (Iridium) ───────────────────────────────────
 #define IRIDIUM_UART     uart1
 #define IRIDIUM_TX_PIN   4
@@ -23,3 +33,5 @@
 #define IRIDIUM_RI_PIN       3    // ring indicator input
 #define IRIDIUM_CTS_PIN      6
 #define IRIDIUM_RTS_PIN      7 
+
+#define LED_PIN           25
