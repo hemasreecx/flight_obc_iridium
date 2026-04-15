@@ -2,7 +2,14 @@
 #include "pico/stdlib.h"
 #include "pico/timeout_helper.h"
 #include <stdio.h>
+/*
+| Movement     | Correct axis behavior |
+| ------------ | --------------------- |
+| Rotate flat  | X & Y change          |
+| Tilt forward | Z changes             |
+| Flip upside  | Z flips sign          |
 
+*/
 #if QMC5883L_DEBUG
 #define QMC5883L_LOG(...) printf(__VA_ARGS__)
 #else

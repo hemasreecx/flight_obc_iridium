@@ -1,8 +1,7 @@
-
+#include "../logging/data_logger.hpp"
 #include "pico/stdlib.h"
 #include "hardware/flash.h"
 #include "hardware/sync.h"
-#include "qmc_data_logger.hpp"
 #include <stdio.h>
 #include <string.h>
 
@@ -29,16 +28,23 @@ MagLoggerMode MagDataLogger::getMode() const
 
 void MagDataLogger::printHeader() const
 {
-    if (_mode == MagLoggerMode::RAW)
+    if (_mode == MagLoggerMode::PRE_CALIB)
     {
-        // Raw counts — mirrors IMU RAW header style
-        printf("raw_x,raw_y,raw_z,"
-               "overflow,skipped,"
-               "timestamp_ms\n");
+        // Raw counts — no processing at all.
+        // Use to collect min/max for hard-iron offset computation:
+        //   offset = (max + min) / 2 per axis
+        printf("raw_x,raw_y,raw_z\n");
+    }
+    else if (_mode == MagLoggerMode::POST_CALIB)
+    {
+        // Post hard-iron subtraction, pre-Gauss, pre-filter.
+        // cal values should be centered around 0 after good calibration.
+        // Temperature included for OBC thermal monitoring.
+        printf("cal_x,cal_y,cal_z,temperature\n");
     }
     else
     {
-        // Converted — Gauss per axis, heading, temperature
+        // Full pipeline — Gauss + heading + temperature + status
         printf("x_gauss,y_gauss,z_gauss,"
                "heading_deg,temperature,"
                "overflow,skipped,"
@@ -46,54 +52,50 @@ void MagDataLogger::printHeader() const
     }
 }
 
-// ── log() ─────────────────────────────────────────────────────────────────────
+// ── log() — CONVERTED mode ────────────────────────────────────────────────────
 
 void MagDataLogger::log(const MagSample& sample) const
 {
-    if (_mode == MagLoggerMode::RAW)
-    {
-        // RAW mode: MagSample doesn't carry raw counts (calibration already
-        // applied upstream). We print the Gauss values scaled back to counts
-        // using the known scale factor so the CSV stays in integer-count units
-        // matching what the sensor actually produced before conversion.
-        //
-        // Why not store raw counts in MagSample?
-        // The acquisition pipeline calibrates before storing — keeping raw
-        // counts too would double the struct size for a rarely-needed field.
-        // If true pre-calibration counts are needed, use logRaw() directly
-        // from the calibration routine instead.
-        static constexpr float SCALE = 3000.0f;   // ±8G → 3000 LSB/Gauss
-
-        printf("%d,%d,%d,%d,%d,%llu\n",
-               (int)(sample.x_gauss * SCALE),
-               (int)(sample.y_gauss * SCALE),
-               (int)(sample.z_gauss * SCALE),
-               (int)sample.overflow,
-               (int)sample.data_skipped,
-               sample.timestamp_ms);
-    }
-    else
-    {
-        // CONVERTED mode: Gauss values, heading, temperature — all processed
-        printf("%.4f,%.4f,%.4f,%.2f,%.2f,%d,%d,%llu\n",
-               sample.x_gauss,
-               sample.y_gauss,
-               sample.z_gauss,
-               sample.heading_deg,
-               sample.temperature,
-               (int)sample.overflow,
-               (int)sample.data_skipped,
-               sample.timestamp_ms);
-    }
+    // Full pipeline output — Gauss values, heading, temperature, status flags.
+    // Only reached in CONVERTED mode — PRE_CALIB and POST_CALIB exit early.
+    printf("%.4f,%.4f,%.4f,%.2f,%.2f,%d,%d,%llu\n",
+           sample.x_gauss,
+           sample.y_gauss,
+           sample.z_gauss,
+           sample.heading_deg,
+           sample.temperature,
+           (int)sample.overflow,
+           (int)sample.data_skipped,
+           sample.timestamp_ms);
 }
 
-// ── logRaw() ──────────────────────────────────────────────────────────────────
+// ── logRaw() — PRE_CALIB mode ─────────────────────────────────────────────────
 
 void MagDataLogger::logRaw(int16_t x, int16_t y, int16_t z) const
 {
-    // Bypasses MagSample entirely — used during calibration routines
-    // where you want to see raw sensor output before any processing.
+    // Raw int16 counts straight from sensor — no calibration, no conversion.
+    // Use this to collect min/max values for hard-iron offset computation:
+    //   offset_x = (max_x + min_x) / 2
+    //   offset_y = (max_y + min_y) / 2
+    //   offset_z = (max_z + min_z) / 2
     printf("%d,%d,%d\n", x, y, z);
+}
+
+// ── logCalibrated() — POST_CALIB mode ────────────────────────────────────────
+
+void MagDataLogger::logCalibrated(float cx, float cy, float cz, float temp) const
+{
+    // Post hard-iron subtraction counts + OBC temperature.
+    // cal values are still in raw count units but centered around 0.
+    //
+    // How to interpret:
+    //   Good calibration  → cx, cy, cz all hover near 0 when stationary
+    //   Still offset      → hard-iron values need adjustment
+    //   Elliptical plot   → soft-iron correction needed (use Magneto tool)
+    //
+    // Temperature is included here so OBC thermal state can be monitored
+    // even during the calibration verification phase.
+    printf("%.2f,%.2f,%.2f,%.2f\n", cx, cy, cz, temp);
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -134,7 +136,6 @@ void MagCalibStore::save(int16_t     hard_x,
                           int16_t     hard_z,
                           const float soft_iron[9])
 {
-    // ── Build the struct to write ─────────────────────────────────────────────
     MagCalibData data;
     data.magic  = MAG_CALIB_MAGIC;
     data.hard_x = hard_x;
@@ -143,15 +144,13 @@ void MagCalibStore::save(int16_t     hard_x,
     memcpy(data.soft_iron, soft_iron, sizeof(data.soft_iron));
     data.crc = computeCRC(hard_x, hard_y, hard_z, soft_iron);
 
-    // ── Pad to full 4KB sector ────────────────────────────────────────────────
-    // flash_range_program() requires the buffer to be a multiple of
-    // FLASH_PAGE_SIZE (256 bytes). We use a full sector buffer (4096 bytes)
-    // to be safe, zeroed out, with our struct at the front.
+    // Pad to full 4KB sector — flash_range_program() requires
+    // buffer to be a multiple of FLASH_PAGE_SIZE (256 bytes).
     static uint8_t buf[FLASH_SECTOR_SIZE];
-    memset(buf, 0xFF, sizeof(buf));          // 0xFF = erased flash state
+    memset(buf, 0xFF, sizeof(buf));
     memcpy(buf, &data, sizeof(MagCalibData));
 
-    // ── Erase then write (interrupts disabled — RP2040 requirement) ───────────
+    // Erase then write — interrupts must be disabled (RP2040 requirement)
     uint32_t irq_state = save_and_disable_interrupts();
     flash_range_erase(MAG_CALIB_FLASH_OFFSET, FLASH_SECTOR_SIZE);
     flash_range_program(MAG_CALIB_FLASH_OFFSET, buf, FLASH_SECTOR_SIZE);
@@ -176,7 +175,6 @@ uint16_t MagCalibStore::computeCRC(int16_t     hard_x,
     // Covers all calibration fields: hard-iron offsets + soft-iron matrix.
     uint16_t crc = 0;
 
-    // Hard-iron offsets
     crc ^= static_cast<uint16_t>(hard_x);
     crc ^= static_cast<uint16_t>(hard_y);
     crc ^= static_cast<uint16_t>(hard_z);

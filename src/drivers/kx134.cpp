@@ -188,7 +188,7 @@ KX134_Status KX134::reset()
 
 
 /* ============================================================
-   DISABLE / ENABLE (PC1 bit in CNTL1)
+   DISABLE / ENABLE (PC1 bit in CNTL1) - we are just putting it in standby mode
    Must disable before changing config registers.
    ============================================================ */
 

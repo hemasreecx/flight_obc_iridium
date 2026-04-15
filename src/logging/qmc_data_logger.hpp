@@ -1,5 +1,5 @@
-#ifndef QMC_DATA_LOGGER_HPP
-#define QMC_DATA_LOGGER_HPP
+#ifndef DATA_LOGGER_HPP
+#define DATA_LOGGER_HPP
 
 #include <stdint.h>
 
@@ -12,16 +12,27 @@
    Window size is set at construction time.
    At 50 Hz ODR, window=8 → ~160 ms of smoothing.
 
+   Buffer capacity is MAX_WINDOW (32 samples).
+   _window controls how many slots are actually used —
+   slots beyond _window are never written or read.
+
    reset() must be called whenever calibration offsets change
    so stale pre-calibration samples are flushed from the buffer.
    ============================================================ */
-class MagMovingAverage
+class MovingAverage
 {
 public:
-    MagMovingAverage(uint8_t window)
-        : _window(window), _sum(0.0f), _count(0), _index(0)
+    // Maximum allowed window size — buffer is sized to this.
+    // Passing window > MAX_WINDOW clamps to MAX_WINDOW safely.
+    static constexpr uint8_t MAX_WINDOW = 32;
+
+    MovingAverage(uint8_t window)
+        : _window(window < MAX_WINDOW ? window : MAX_WINDOW),
+          _sum(0.0f), _count(0), _index(0)
     {
-        for (int i = 0; i < 32; i++) _buf[i] = 0.0f;
+        // Only clear slots that will actually be used.
+        // Slots beyond _window are never touched by update() or reset().
+        for (int i = 0; i < _window; i++) _buf[i] = 0.0f;
     }
 
     float update(float val)
@@ -29,23 +40,24 @@ public:
         _sum -= _buf[_index];
         _buf[_index] = val;
         _sum += val;
-        _index = (_index + 1) % _window;
-        if (_count < _window) _count++;
+        _index = (_index + 1) % _window;   // wraps at _window, not MAX_WINDOW
+        if (_count < _window) _count++;     // ramps up to _window on first fill
         return _sum / _count;
     }
 
     void reset()
     {
         _sum = 0.0f; _count = 0; _index = 0;
-        for (int i = 0; i < 32; i++) _buf[i] = 0.0f;
+        // Only clear slots that were actually used — same as constructor
+        for (int i = 0; i < _window; i++) _buf[i] = 0.0f;
     }
 
 private:
-    uint8_t _window;
-    float   _buf[32];   // max window size = 32 samples
-    float   _sum;
-    uint8_t _count;     // ramps up from 0 to _window on first fill
-    uint8_t _index;     // write head — wraps at _window
+    uint8_t _window;            // active window size (≤ MAX_WINDOW)
+    float   _buf[MAX_WINDOW];   // ring buffer — only [0.._window-1] used
+    float   _sum;               // running sum of active window
+    uint8_t _count;             // ramps 0 → _window on first fill
+    uint8_t _index;             // write head — wraps at _window
 };
 
 /* ============================================================
@@ -68,7 +80,7 @@ struct MagSample
     float    y_gauss;       // calibrated + filtered Y field (Gauss)
     float    z_gauss;       // calibrated + filtered Z field (Gauss)
     float    heading_deg;   // 0–360° compass heading (XY plane)
-    float    temperature;   // sensor die temperature °C
+    float    temperature;   // sensor die temperature °C (offset corrected)
     bool     overflow;      // true → field exceeded ±8G range, data unreliable
     bool     data_skipped;  // true → MCU missed a sample from the sensor
     uint64_t timestamp_ms;  // milliseconds since boot (to_ms_since_boot)
@@ -76,30 +88,52 @@ struct MagSample
 
 /* ============================================================
    MagLoggerMode
-   Selects output format for MagDataLogger.
+   Three-way switch controlling what stage of the pipeline
+   gets printed. Use this to debug calibration step by step.
 
-   RAW       = int16 ADC counts before calibration
-               e.g.  raw_x=1240, raw_y=-530, raw_z=890
-   CONVERTED = calibrated Gauss + heading + temperature
-               e.g.  x=0.413G, y=-0.177G, z=0.297G, hdg=156.8°
+   PRE_CALIB  (2) — raw int16 counts straight from sensor.
+                    Use this to collect min/max for hard-iron
+                    calibration. Rotate sensor in figure-8,
+                    watch min/max stabilize, then compute offsets.
+                    Header:  raw_x, raw_y, raw_z
+
+   POST_CALIB (1) — float counts after hard-iron subtraction
+                    but before Gauss conversion or filtering.
+                    + temperature for OBC monitoring.
+                    Use this to verify calibration worked —
+                    values should be centered around 0.
+                    Header:  cal_x, cal_y, cal_z, temperature
+
+   CONVERTED  (0) — full pipeline output. Calibrated + filtered
+                    + Gauss + heading + temperature.
+                    Header:  x_gauss, y_gauss, z_gauss,
+                             heading_deg, temperature,
+                             overflow, skipped, timestamp_ms
+
+   Correct debug workflow:
+     Step 1 → LOGGER_MODE 2 (PRE_CALIB)   collect raw min/max
+     Step 2 → compute hard-iron offsets = (max+min)/2 per axis
+     Step 3 → LOGGER_MODE 1 (POST_CALIB)  verify centered at 0
+     Step 4 → LOGGER_MODE 0 (CONVERTED)   check heading is correct
    ============================================================ */
 enum class MagLoggerMode : uint8_t
 {
-    RAW       = 0,
-    CONVERTED = 1
+    CONVERTED  = 0,   // full pipeline — Gauss + heading + temperature
+    POST_CALIB = 1,   // after hard-iron subtraction, before Gauss + temperature
+    PRE_CALIB  = 2    // raw int16 counts — no processing at all
 };
 
 /* ============================================================
    MagDataLogger
    Single output boundary for all magnetometer serial data.
-   Nothing else in the mag codebase should printf directly —
-   all data exits the system through log() or logRaw() here.
+   Nothing else in the mag codebase should printf directly.
 
-   Mirrors the IMU DataLogger design:
-    - Same RAW/CONVERTED mode switch
-    - printHeader() matches active mode automatically
-    - log() is the only way processed data leaves the system
-    - logRaw() bypasses the pipeline for calibration routines
+   Three print points matching the three pipeline stages:
+    - logRaw()        → PRE_CALIB  — raw int16 counts
+    - logCalibrated() → POST_CALIB — post hard-iron counts + temperature
+    - log()           → CONVERTED  — full MagSample output
+
+   printHeader() always matches the active mode automatically.
    ============================================================ */
 class MagDataLogger
 {
@@ -113,31 +147,39 @@ public:
      * @brief Print CSV header matching the active mode.
      *        Call once before logging starts.
      *
-     * RAW header:
-     *   raw_x,raw_y,raw_z,overflow,skipped,timestamp_ms
-     *
-     * CONVERTED header:
-     *   x_gauss,y_gauss,z_gauss,heading_deg,temperature,overflow,skipped,timestamp_ms
+     * PRE_CALIB  header:  raw_x,raw_y,raw_z
+     * POST_CALIB header:  cal_x,cal_y,cal_z,temperature
+     * CONVERTED  header:  x_gauss,y_gauss,z_gauss,heading_deg,
+     *                     temperature,overflow,skipped,timestamp_ms
      */
     void printHeader() const;
 
     /**
-     * @brief Log one fully-processed MagSample.
-     *        In RAW mode:       prints Gauss values scaled back to counts.
-     *        In CONVERTED mode: prints Gauss + heading + temperature.
-     *
-     *        Note: RAW mode re-scales from Gauss using SCALE=3000 LSB/G
-     *        because MagSample stores calibrated floats, not raw int16.
-     *        For true pre-calibration counts use logRaw() directly.
+     * @brief Log one fully-processed MagSample — CONVERTED mode.
+     *        Prints Gauss + heading + temperature + status flags.
+     *        Should not be called in PRE_CALIB or POST_CALIB mode
+     *        as the pipeline exits early before reaching this point.
      */
     void log(const MagSample& sample) const;
 
     /**
-     * @brief Log raw counts directly — bypasses MagSample entirely.
-     *        Used during calibration routines before the acquisition
-     *        pipeline is active, so raw sensor output can be verified.
+     * @brief Log raw int16 counts — PRE_CALIB mode.
+     *        Bypasses MagSample and the entire pipeline.
+     *        Use during calibration to collect min/max per axis.
+     *        Also used in run_calibration() in main.cpp.
      */
     void logRaw(int16_t x, int16_t y, int16_t z) const;
+
+    /**
+     * @brief Log post-hard-iron float counts + temperature — POST_CALIB mode.
+     *        Called after hard-iron subtraction, before Gauss conversion.
+     *        cal_x/y/z should sit near 0 if hard-iron calibration is correct.
+     *        temperature included for OBC thermal monitoring at this stage.
+     *
+     *        If cal values are still offset → adjust hard-iron offsets.
+     *        If elliptical when plotted → soft-iron correction needed.
+     */
+    void logCalibrated(float cx, float cy, float cz, float temp) const;
 
 private:
     MagLoggerMode _mode;
@@ -213,7 +255,6 @@ public:
      * @brief Load calibration from flash.
      *        Validates magic and CRC — returns false if either fails,
      *        leaving data unchanged so caller can trigger recalibration.
-     *
      * @param data  Output — filled on success.
      * @return true if valid calibration was found.
      */
@@ -223,7 +264,6 @@ public:
      * @brief Save hard-iron offsets + soft-iron matrix to flash.
      *        Fills magic and CRC automatically.
      *        Erases the sector then writes the full MagCalibData struct.
-     *
      * @param hard_x/y/z   Hard-iron offsets in ADC counts.
      * @param soft_iron     9-element row-major soft-iron matrix.
      */
@@ -243,7 +283,6 @@ private:
     /**
      * @brief XOR checksum over hard-iron offsets + soft-iron matrix bytes.
      *        Same algorithm as IMU CalibStore for consistency.
-     *        Covers the full bit pattern of every float via uint16 pairs.
      */
     static uint16_t computeCRC(int16_t     hard_x,
                                 int16_t     hard_y,

@@ -5,7 +5,7 @@
 #include "hardware/flash.h"              // flash_range_erase, flash_range_program
 #include "hardware/sync.h"               // save_and_disable_interrupts, restore_interrupts
 #include "pico/stdlib.h"
-
+// data_logger make into int16.. remove decimal bymultiply with 1000.. make that much amount of precision a int16 can be done
 /* ============================================================
    DataLogger
    ============================================================ */
