@@ -122,13 +122,15 @@ struct LSM6DSV80X_CalibData
 
 /* ============================================================
    LSM6DSV80X_CalibStore
-   Reads and writes LSM6DSV80X_CalibData to the last 4KB
-   sector of RP2040 internal flash.
+  Reads and writes LSM6DSV80X_CalibData to a dedicated 4KB
+  sector of RP2040 internal flash.
 
    Flash layout:
      [0x000000  ... program code ...]
      [... empty ...]
-     [0x1FF000  ← CALIB_FLASH_OFFSET  4KB sector for calib]
+    [0x1FD000  ← CALIB_FLASH_OFFSET  4KB sector for LSM calib]
+    [0x1FE000  ← magnetometer calibration sector]
+    [0x1FF000  ← KX134 calibration sector]
 
    RP2040 flash rules:
      - Cannot execute from flash while erasing/writing.
@@ -160,7 +162,10 @@ class LSM6DSV80X_CalibStore
 public:
 
     static constexpr uint32_t CALIB_MAGIC        = 0x16D5CA1B;
-    static constexpr uint32_t CALIB_FLASH_OFFSET = 0x200000 - 0x1000; // last 4KB of 2MB flash
+    // Keep LSM calibration in its own sector to avoid clashing with:
+    // - KX134 CalibStore at 0x1FF000
+    // - QMC MagCalibStore at 0x1FE000
+    static constexpr uint32_t CALIB_FLASH_OFFSET = 0x200000 - 0x3000; // 0x1FD000
 
     /**
      * @brief Attempt to load calibration from flash.

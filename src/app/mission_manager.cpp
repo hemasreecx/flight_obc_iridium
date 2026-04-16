@@ -1,66 +1,97 @@
-/*  
-init()
-   ↓
-loop:
-   sensor_manager::task()
-   ↓
-   fill_record() - in ring buffer 20 samples per sec .. can create 3 ring buffers for 3 phases
-   ↓
-   check phase
-   ↓
-   transmit (Iridium)
-   ↓
-   debug print
-
-*/
-
-// currently this code is changing file sbased ontime not on our logic of first pre then when time comes then to blackout..
-//  after drain out to post
-
 #include "mission_manager.hpp"
 #include "mission_clock.hpp"
 #include "sensor_manager.hpp"
-#include "pin_config.hpp"
 #include "config.hpp"
 #include "log_format.hpp"
+
 #include "pico/stdlib.h"
-#include "hardware/gpio.h"
+
 #include <stdio.h>
 #include <stdint.h>
-
-#include "iridium_driver.hpp"
-#include "rockblock_manager.hpp"
-
-#if SYSTEM_DEBUG
-#define DBG(...) do { printf(__VA_ARGS__); fflush(stdout); } while(0)
-#else
-#define DBG(...)
-#endif
 
 namespace mission_manager
 {
 
-// ============================================================
-// Internal state // are we storing these in Flash or just for on the go?
-// ============================================================
+static constexpr uint8_t PHASE_RING_SIZE =
+    MAX_PACKETS_PER_PHASE * rockblock_manager::MAX_RECORDS_PER_PACKET;
 
-static Phase    _current_phase = Phase::NONE;
-static uint32_t _counter       = 0;
+struct PhaseRing
+{
+    log_format::Record data[PHASE_RING_SIZE];
+    uint8_t head = 0;
+    uint8_t tail = 0;
+    uint8_t count = 0;
+};
 
+static Phase _current_phase = Phase::NONE;
+static uint32_t _counter = 0;
 static log_format::Record _latest_record = {};
 
-// ============================================================
-// Time helpers
-// ============================================================
+static PhaseRing _ring_pre;
+static PhaseRing _ring_blackout;
+static PhaseRing _ring_post;
+
+static bool _mission_time_done = false;
+static bool _project_complete = false;
+static uint32_t _tx_records_sent = 0;
+static uint32_t _tx_packets_sent = 0;
+static uint32_t _tx_records_dropped = 0;
+static uint32_t _tx_packets_dropped = 0;
+
+static bool ring_push(PhaseRing& ring, const log_format::Record& rec)
+{
+    if (ring.count >= PHASE_RING_SIZE)
+        return false;
+
+    ring.data[ring.tail] = rec;
+    ring.tail = static_cast<uint8_t>((ring.tail + 1) % PHASE_RING_SIZE);
+    ring.count++;
+    return true;
+}
+
+static bool ring_pop_batch(PhaseRing& ring,
+                           log_format::Record* out,
+                           uint8_t n)
+{
+    if (ring.count < n)
+        return false;
+
+    for (uint8_t i = 0; i < n; i++)
+    {
+        out[i] = ring.data[ring.head];
+        ring.head = static_cast<uint8_t>((ring.head + 1) % PHASE_RING_SIZE);
+    }
+    ring.count = static_cast<uint8_t>(ring.count - n);
+    return true;
+}
+
+static uint8_t ring_pop_up_to(PhaseRing& ring,
+                              log_format::Record* out,
+                              uint8_t max_n)
+{
+    if (ring.count == 0)
+        return 0;
+
+    uint8_t n = (ring.count < max_n) ? ring.count : max_n;
+
+    for (uint8_t i = 0; i < n; i++)
+    {
+        out[i] = ring.data[ring.head];
+        ring.head = static_cast<uint8_t>((ring.head + 1) % PHASE_RING_SIZE);
+    }
+    ring.count = static_cast<uint8_t>(ring.count - n);
+    return n;
+}
+
+static bool all_rings_empty()
+{
+    return (_ring_pre.count == 0) && (_ring_blackout.count == 0) && (_ring_post.count == 0);
+}
 
 static uint32_t elapsed_s()
 {
     return mission::mission_clock::now_seconds();
 }
-
-// ============================================================
-// Phase helpers
-// ============================================================
 
 static Phase compute_phase(uint32_t secs)
 {
@@ -76,221 +107,173 @@ static Phase compute_phase(uint32_t secs)
     return Phase::DONE;
 }
 
-static const char* phase_name(Phase p)
+static void enqueue_record_for_phase(const log_format::Record& rec)
 {
-    switch (p)
+    PhaseRing* target = &_ring_pre;
+
+    if (_current_phase == Phase::BLACKOUT)
+        target = &_ring_blackout;
+    else if (_current_phase == Phase::POST)
+        target = &_ring_post;
+
+    ring_push(*target, rec);
+}
+
+static void account_successful_tx(uint8_t records_sent)
+{
+    _tx_packets_sent++;
+    _tx_records_sent += records_sent;
+}
+
+static void account_dropped_tx(uint8_t records_dropped)
+{
+    _tx_packets_dropped++;
+    _tx_records_dropped += records_dropped;
+}
+
+// Normal mission-time transmit policy.
+static void try_transmit_one_packet()
+{
+    log_format::Record batch[rockblock_manager::MAX_RECORDS_PER_PACKET];
+    bool got_batch = false;
+
+    if (_current_phase == Phase::POST)
     {
-        case Phase::PRE:      return "PRE";
-        case Phase::BLACKOUT: return "BLACKOUT";
-        case Phase::POST:     return "POST";
-        default:              return "NONE";
+        got_batch = ring_pop_batch(_ring_blackout, batch, rockblock_manager::MAX_RECORDS_PER_PACKET) ||
+                    ring_pop_batch(_ring_post,     batch, rockblock_manager::MAX_RECORDS_PER_PACKET) ||
+                    ring_pop_batch(_ring_pre,      batch, rockblock_manager::MAX_RECORDS_PER_PACKET);
     }
-}
+    else if (_current_phase == Phase::BLACKOUT)
+    {
+        got_batch = ring_pop_batch(_ring_blackout, batch, rockblock_manager::MAX_RECORDS_PER_PACKET) ||
+                    ring_pop_batch(_ring_pre,      batch, rockblock_manager::MAX_RECORDS_PER_PACKET) ||
+                    ring_pop_batch(_ring_post,     batch, rockblock_manager::MAX_RECORDS_PER_PACKET);
+    }
+    else
+    {
+        got_batch = ring_pop_batch(_ring_pre, batch, rockblock_manager::MAX_RECORDS_PER_PACKET);
+    }
 
-
-
-// ============================================================
-// Phase switch
-// ============================================================
-
-static void switch_phase(Phase new_phase)
-{
-    DBG("[mission] phase %s → %s at %lus\n",
-        phase_name(_current_phase),
-        phase_name(new_phase),
-        elapsed_s());
-
-    _current_phase = new_phase;
-}
-
-// ============================================================
-// USB debug print
-// ============================================================
-
-static uint32_t _print_counter = 0;
-static constexpr uint32_t PRINT_EVERY = 1;
-
-static void print_record(const log_format::Record& r)
-{
-    if ((_print_counter++ % PRINT_EVERY) != 0)
+    if (!got_batch)
         return;
 
-    printf("[%s] ctr=%lu "
-           "acc=%d,%d,%d "
-           "mag=%d,%d,%d "
-           "temp=%.2f "
-           "bat=%umV\n",
-           phase_name(_current_phase),
-           r.counter,
-           r.acc3_x, r.acc3_y, r.acc3_z,
-           r.mag_x,  r.mag_y,  r.mag_z,
-           (double)(r.obc_temperature / 100.0f),
-           r.battery_voltage);
+    const uint8_t count = rockblock_manager::MAX_RECORDS_PER_PACKET;
+    const bool ok = rockblock_manager::transmit_records(batch, count);
+    if (ok)
+        account_successful_tx(count);
+    else
+        account_dropped_tx(count);
 }
-static void handle_iridium()
+
+// End-of-mission drain policy: BLACKOUT -> POST -> PRE.
+// Uses up-to-3 records so remaining 1-2 records are not stranded.
+static void drain_backlog_one_packet()
 {
-    static uint32_t last_tx_ms = 0;
-    const uint32_t now_ms = to_ms_since_boot(get_absolute_time());
-    if ((now_ms - last_tx_ms) < IRIDIUM_TX_INTERVAL_MS)
+    log_format::Record batch[rockblock_manager::MAX_RECORDS_PER_PACKET];
+    uint8_t count = 0;
+
+    if (_ring_blackout.count > 0)
+        count = ring_pop_up_to(_ring_blackout, batch, rockblock_manager::MAX_RECORDS_PER_PACKET);
+    else if (_ring_post.count > 0)
+        count = ring_pop_up_to(_ring_post, batch, rockblock_manager::MAX_RECORDS_PER_PACKET);
+    else if (_ring_pre.count > 0)
+        count = ring_pop_up_to(_ring_pre, batch, rockblock_manager::MAX_RECORDS_PER_PACKET);
+
+    if (count == 0)
         return;
 
-    last_tx_ms = now_ms;
-    bool tx_ok = rockblock_manager::force_transmit(_latest_record);
-    if (!tx_ok)
-    {
-        DBG("[mission] Iridium live TX failed\n");
-    }
+    const bool ok = rockblock_manager::transmit_records(batch, count);
+    if (ok)
+        account_successful_tx(count);
+    else
+        account_dropped_tx(count);
 }
-// ============================================================
-// Recalibration prompt
-// ============================================================
-
-static bool wait_for_recalib_request()
-{
-    printf("Send 'c' within %d seconds to recalibrate...\n",
-           RECALIB_PROMPT_MS / 1000);
-    fflush(stdout);
-
-    uint32_t deadline = to_ms_since_boot(get_absolute_time())
-                        + RECALIB_PROMPT_MS;
-
-    while (to_ms_since_boot(get_absolute_time()) < deadline)
-    {
-        int ch = getchar_timeout_us(0);
-        if (ch != PICO_ERROR_TIMEOUT &&
-            (ch == 'c' || ch == 'C'))
-        {
-            printf("Recalibration requested.\n");
-            fflush(stdout);
-            return true;
-        }
-        sleep_ms(10);
-    }
-    return false;
-}
-
-// ============================================================
-// init()
-// ============================================================
 
 bool init()
 {
     _current_phase = Phase::NONE;
-    _counter       = 0;
+    _counter = 0;
+    _latest_record = {};
+    _ring_pre = {};
+    _ring_blackout = {};
+    _ring_post = {};
 
-    mission::mission_clock::init();
+    _mission_time_done = false;
+    _project_complete = false;
+    _tx_records_sent = 0;
+    _tx_packets_sent = 0;
+    _tx_records_dropped = 0;
+    _tx_packets_dropped = 0;
 
-    DBG("[mission] ========================\n");
-    DBG("[mission] OBC FLIGHT SYSTEM BOOT\n");
-    DBG("[mission] ========================\n");
+    if (!mission::mission_clock::init())
+        return false;
 
-    // ── Recalibration prompt ──────────────────────────────────
-    bool force_recalib = wait_for_recalib_request();
-    if (force_recalib)
-    {
-        sensor_manager::request_imu_recalib();
-        sensor_manager::request_mag_recalib();
-        sensor_manager::request_lsm_recalib();
-        sensor_manager::request_lsm_recalib();
-    }
-
-    // ── Sensor init ───────────────────────────────────────────
-    bool sensors_ok = sensor_manager::init();
-    if (!sensors_ok)
-        DBG("[mission] WARN: one or more sensors degraded\n");
-    else
-        DBG("[mission] all sensors OK\n");
-
-    iridium_driver::Config iridium_cfg;
-    iridium_cfg.uart_inst  = IRIDIUM_UART;
-    iridium_cfg.tx_pin     = IRIDIUM_TX_PIN;
-    iridium_cfg.rx_pin     = IRIDIUM_RX_PIN;
-    iridium_cfg.baud_rate  = 19200;
-    iridium_cfg.sleep_pin  = IRIDIUM_ONOFF_PIN;
-    iridium_cfg.netavb_pin = IRIDIUM_NETAVB_PIN;
-    iridium_cfg.ri_pin     = IRIDIUM_RI_PIN;
-
-    if (!rockblock_manager::init(iridium_cfg))
-    {
-        DBG("[mission] WARN: Iridium init failed — %s\n",
-            rockblock_manager::error_string(
-                rockblock_manager::last_error()));
-    }
-    else
-    {
-        DBG("[mission] Iridium OK\n");
-    }
-
-    // ── Open PRE phase — always start here ───────────────────
-    switch_phase(Phase::PRE);
-
-    DBG("[mission] PRE:      0 → %ds\n",
-        PHASE_PRE_DURATION_S);
-    DBG("[mission] BLACKOUT: %d → %ds\n",
-        PHASE_PRE_DURATION_S,
-        PHASE_PRE_DURATION_S + PHASE_BLACKOUT_DURATION_S);
-    DBG("[mission] POST:     %ds → %ds\n",
-    PHASE_PRE_DURATION_S + PHASE_BLACKOUT_DURATION_S,
-    PHASE_TOTAL_DURATION_S);
-    DBG("[mission] flight loop starting\n");
-
+    _current_phase = Phase::PRE;
     return true;
 }
 
 void task()
 {
-    DBG("[mission] task() start\n");
+    if (_project_complete)
+        return;
 
-    // ── 1. Sensor tasks ───────────────────────────────────────
-    sensor_manager::task();
-    DBG("[mission] sensors done\n");
+    const Phase phase_now = compute_phase(elapsed_s());
 
-    // ── 2. Fill record with mission time as the record counter ──
-    const uint32_t record_time = mission::mission_clock::now_seconds();
-    sensor_manager::fill_record(_latest_record, record_time);
-    _counter++;
-    DBG("[mission] record filled\n");
-
-    // ── 3. Phase boundary check ───────────────────────────────
-    // [mission] phase PRE → BLACKOUT at 60s
-    Phase new_phase = compute_phase(elapsed_s());
-    if (new_phase != _current_phase)
+    if (!_mission_time_done && phase_now == Phase::DONE)
     {
-        if (new_phase == Phase::DONE)
-        {
-            // Mission complete — close files, sleep everything
-            DBG("[mission] MISSION COMPLETE at %lus\n", elapsed_s());
-            shutdown();
-            return;
-        }
-        switch_phase(new_phase);
+        _mission_time_done = true;
+        _current_phase = Phase::DONE;
+        printf("[mission] Mission time complete. Draining backlog BLACKOUT -> POST -> PRE...\n");
+        fflush(stdout);
     }
-    DBG("[mission] phase check done\n");
-    handle_iridium();
-    DBG("[mission] iridium done\n");
-}
 
-// ============================================================
-// shutdown()
-// ============================================================
+    if (_mission_time_done)
+    {
+        drain_backlog_one_packet();
+
+        if (all_rings_empty())
+        {
+            printf("[mission] Project done. TX sent packets=%lu, sent records=%lu, dropped packets=%lu, dropped records=%lu. Stopping.\n",
+                   _tx_packets_sent,
+                   _tx_records_sent,
+                   _tx_packets_dropped,
+                   _tx_records_dropped);
+            fflush(stdout);
+
+            shutdown();
+            _project_complete = true;
+        }
+
+        mission::mission_clock::maybe_save();
+        return;
+    }
+
+    _current_phase = phase_now;
+
+    sensor_manager::task();
+
+    const uint32_t mission_sec = mission::mission_clock::now_seconds();
+    sensor_manager::fill_record(_latest_record, mission_sec);
+    _counter++;
+
+    enqueue_record_for_phase(_latest_record);
+    try_transmit_one_packet();
+    mission::mission_clock::maybe_save();
+}
 
 void shutdown()
 {
-    DBG("[mission] shutdown\n");
-
-
     rockblock_manager::shutdown();
-
-
     _current_phase = Phase::NONE;
 }
 
-// ============================================================
-// Status
-// ============================================================
-
-Phase    current_phase()   { return _current_phase; }
+Phase current_phase() { return _current_phase; }
 uint32_t elapsed_seconds() { return elapsed_s(); }
-uint32_t record_counter()  { return _counter; } // it is counting no.of records logged
+uint32_t record_counter() { return _counter; }
+bool mission_complete() { return _project_complete; }
+uint32_t transmitted_record_count() { return _tx_records_sent; }
+uint32_t transmitted_packet_count() { return _tx_packets_sent; }
+uint32_t dropped_record_count() { return _tx_records_dropped; }
+uint32_t dropped_packet_count() { return _tx_packets_dropped; }
 
 } // namespace mission_manager

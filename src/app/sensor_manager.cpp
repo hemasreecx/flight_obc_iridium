@@ -19,6 +19,8 @@
 
 static constexpr uint8_t  SENSOR_INIT_RETRIES   = 3;
 static constexpr uint32_t SENSOR_RETRY_DELAY_MS = 2000;
+static constexpr uint32_t LED_PULSE_ON_MS       = 120;
+static constexpr uint32_t LED_PULSE_OFF_MS      = 120;
 
 namespace sensor_manager
 {
@@ -97,6 +99,22 @@ static void i2c_bus_recovery(uint8_t sda_pin, uint8_t scl_pin)
     DBG("[sensor] I2C recovery done\n");
 }
 
+// LED pulse code for calibration visibility:
+// 1 pulse = KX134 IMU recalibration
+// 2 pulses = QMC magnetometer recalibration
+// 3 pulses = LSM IMU recalibration/defaulting requested
+static void led_pulse_code(uint8_t pulses)
+{
+    for (uint8_t i = 0; i < pulses; i++)
+    {
+        gpio_put(LED_PIN, 1);
+        sleep_ms(LED_PULSE_ON_MS);
+        gpio_put(LED_PIN, 0);
+        sleep_ms(LED_PULSE_OFF_MS);
+    }
+    sleep_ms(200);
+}
+
 static int16_t to_i16_saturated(float value)
 {
     if (value > 32767.0f) return 32767;
@@ -134,6 +152,9 @@ static void apply_lsm_calibration_from_store_or_default()
     }
     else
     {
+        if (_force_lsm_recalib)
+            led_pulse_code(3);
+
         _lsm_acq.clearGYOffsets();
         _lsm_acq.clearHGOffsets();
         _lsm_acq.clearTempOffset();
@@ -146,6 +167,7 @@ static void apply_lsm_calibration_from_store_or_default()
 static void run_imu_calibration(int16_t& ox, int16_t& oy, int16_t& oz)
 {
     DBG("[sensor] IMU calibration — keep still\n");
+    led_pulse_code(1);
     gpio_put(LED_PIN, 1);
 
     int32_t sx = 0, sy = 0, sz = 0;
@@ -201,6 +223,7 @@ static void run_imu_calibration(int16_t& ox, int16_t& oy, int16_t& oz)
 static void run_mag_calibration(int16_t& ox, int16_t& oy, int16_t& oz)
 {
     DBG("[sensor] MAG calibration — rotate in figure-8\n");
+    led_pulse_code(2);
     gpio_put(LED_PIN, 1);
 
     int16_t mnx =  32767, mny =  32767, mnz =  32767;
@@ -424,6 +447,10 @@ bool init()
     gpio_put(LED_PIN, 0);
 
     bool all_ok = true;
+
+    if (_force_imu_recalib) led_pulse_code(1);
+    if (_force_mag_recalib) led_pulse_code(2);
+    if (_force_lsm_recalib) led_pulse_code(3);
 
     i2c_init(KX134_I2C_BUS, I2C_SPEED_HZ);
     gpio_set_function(KX134_SDA_PIN, GPIO_FUNC_I2C);

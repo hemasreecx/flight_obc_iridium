@@ -93,7 +93,9 @@ void LSM6DSV80X_DataLogger::log(const LSM6DSV80X_RawGY& raw_gy,
    ┌─────────────────────────────┐ 0x000000
    │   program code + data       │
    │   ... empty space ...       │
-   ├─────────────────────────────┤ 0x1FF000  ← CALIB_FLASH_OFFSET
+  ├─────────────────────────────┤ 0x1FF000  ← KX134 calib sector
+  ├─────────────────────────────┤ 0x1FE000  ← magnetometer calib sector
+  ├─────────────────────────────┤ 0x1FD000  ← CALIB_FLASH_OFFSET (LSM)
    │   LSM6DSV80X_CalibData      │  last 4KB sector
    └─────────────────────────────┘ 0x200000
 

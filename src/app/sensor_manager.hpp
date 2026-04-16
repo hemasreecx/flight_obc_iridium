@@ -29,7 +29,33 @@
             ↓
         return record
 */
-
+/*
+task() called every loop
+│
+├─ _project_complete? → return immediately
+│
+├─ compute_phase(elapsed_s())
+│
+├─ phase == DONE? (first time)
+│   └─ set _mission_time_done = true, log message
+│
+├─ _mission_time_done?
+│   ├─ drain_backlog_one_packet()   ← BLACKOUT → POST → PRE order
+│   ├─ all_rings_empty()?
+│   │   ├─ log final TX stats
+│   │   ├─ shutdown()              ← sleep Iridium modem
+│   │   └─ _project_complete = true
+│   ├─ mission_clock::maybe_save()
+│   └─ return
+│
+├─ _current_phase = phase_now
+├─ sensor_manager::task()          ← poll all sensors
+├─ sensor_manager::fill_record()   ← pack into Record struct
+├─ _counter++
+├─ enqueue_record_for_phase()      ← route to correct ring
+├─ try_transmit_one_packet()       ← attempt Iridium TX
+└─ mission_clock::maybe_save()     ← persist clock state
+*/
 #pragma once
 #include <stdint.h>
 #include "config.hpp"
@@ -53,7 +79,7 @@ namespace sensor_manager
 
 /* ============================================================
    init()
-   Call once from mission_manager::init().
+   Call once from system_init::init() (before mission_manager::init()).
    Each enabled sensor gets 3 init attempts with reset between.
    Returns true  = all enabled sensors healthy.
    Returns false = one or more sensors degraded.
@@ -89,7 +115,7 @@ bool ina_healthy();
 /* ============================================================
    Calibration requests
    Call before init() — flags read during init().
-   Called from mission_manager based on recalib prompt.
+   Called from system_init::poll_sensor_recalib_requests() (per-sensor keys at boot).
    ============================================================ */
 void request_imu_recalib();
 void request_mag_recalib();

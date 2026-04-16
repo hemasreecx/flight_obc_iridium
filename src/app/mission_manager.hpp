@@ -26,13 +26,9 @@ enum class Phase : uint8_t
 
 /* ============================================================
    init()
-   Call once from main().
-   - Shows recalib prompt (FLIGHT_MODE only)
-   - Inits sensor_manager
-   
-   - Inits Iridium
-   Returns false if critical init fails.
-   System runs degraded if non-critical subsystem fails.
+   Call from system_init::init() after sensor_manager and Iridium init.
+   Resets mission buffers/counters and starts mission_clock.
+   Returns false if mission_clock::init() fails.
    ============================================================ */
 bool init();
 
@@ -57,6 +53,11 @@ void shutdown();
    ============================================================ */
 Phase       current_phase();
 uint32_t    elapsed_seconds();
-uint32_t    record_counter();  // increments with each record, never resets
+uint32_t    record_counter();  
+bool        mission_complete();
+uint32_t    transmitted_record_count();
+uint32_t    transmitted_packet_count();
+uint32_t    dropped_record_count();
+uint32_t    dropped_packet_count();
 
 } // namespace mission_manager

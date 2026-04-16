@@ -24,6 +24,10 @@
 
 #define IRIDIUM_TX_INTERVAL_MS  20000
 
+// Max packets worth of records buffered per mission phase.
+// Effective ring size per phase = MAX_PACKETS_PER_PHASE * rockblock_manager::MAX_RECORDS_PER_PACKET.
+#define MAX_PACKETS_PER_PHASE    8
+
 // -- Sensor addresses ---------------------------------------------------------
 
 #define KX134_I2C_ADDR_LOW      0x1E
@@ -42,5 +46,6 @@
 #define MAG_CALIB_DELAY_MS      5
 #define LSM6DSV80X_CALIB_SAMPLES       1000
 #define LSM6DSV80X_CALIB_DELAY_MS      5
-#define RECALIB_PROMPT_MS       10000   // wait at boot for 'c' key
+// Boot window (ms): optional per-sensor recalibration via USB serial — see system_init.cpp
+#define RECALIB_PROMPT_MS       10000
 
