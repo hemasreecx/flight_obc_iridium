@@ -99,6 +99,20 @@ static void i2c_bus_recovery(uint8_t sda_pin, uint8_t scl_pin)
     DBG("[sensor] I2C recovery done\n");
 }
 
+static void ina_set_enabled(bool enabled)
+{
+    gpio_put(INA260_EN, enabled ? 1 : 0);
+}
+
+static void ina_power_cycle()
+{
+    DBG("[sensor] INA power cycle via EN pin\n");
+    ina_set_enabled(false);
+    sleep_ms(20);
+    ina_set_enabled(true);
+    sleep_ms(20);
+}
+
 // LED pulse code for calibration visibility:
 // 1 pulse = KX134 IMU recalibration
 // 2 pulses = QMC magnetometer recalibration
@@ -397,6 +411,9 @@ static bool init_ina_with_retry()
     {
         DBG("[sensor] INA260 init attempt %d/%d\n", attempt, SENSOR_INIT_RETRIES);
 
+        if (attempt > 1)
+            ina_power_cycle();
+
         if (!_ina.reset())
         {
             DBG("[sensor] INA reset failed\n");
@@ -482,6 +499,12 @@ bool init()
     gpio_init(LED_PIN);
     gpio_set_dir(LED_PIN, GPIO_OUT);
     gpio_put(LED_PIN, 0);
+
+    // INA260 power-enable pin (active high): ensure sensor rail is ON before INA init
+    gpio_init(INA260_EN);
+    gpio_set_dir(INA260_EN, GPIO_OUT);
+    ina_set_enabled(true);
+    sleep_ms(10);
 
     bool all_ok = true;
 
@@ -670,6 +693,7 @@ void task()
             {
                 DBG("[sensor] INA threshold — recovery\n");
                 i2c_bus_recovery(INA260_SDA_PIN, INA260_SCL_PIN);
+                ina_power_cycle();
                 _ina.reset();
                 sleep_ms(50);
 
