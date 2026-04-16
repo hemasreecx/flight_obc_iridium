@@ -5,7 +5,7 @@
 #define SENSOR_LOG_RAW          0   // 1=raw counts, 0=converted
 
 // ── Sensor sample rate ────────────────────────────────────────
-#define SAMPLE_RATE_HZ          20 // FINAL - NEED to decimate from samples 
+#define SAMPLE_RATE_HZ          5
 
 // ── I2C speed ─────────────────────────────────────────────────
 #define I2C_SPEED_HZ            400000

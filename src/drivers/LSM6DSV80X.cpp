@@ -1,4 +1,5 @@
 #include "LSM6DSV80X.hpp"
+#include "config.hpp"
 #include "hardware/i2c.h"
 #include <cstring>
 #include "pico/time.h"

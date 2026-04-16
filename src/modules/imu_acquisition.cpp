@@ -9,7 +9,9 @@ IMUAcquisition::IMUAcquisition(KX134& imu, DataLogger& logger)
       _last_sample_time_ms(0),
       _converter(KX134_Range::RANGE_64G),
       _filter(),                          // zero-initialised by MovingAverage()
-      _logger(logger)
+      _logger(logger),
+      _latest{},
+      _has_sample(false)
 {
 }
 
@@ -27,6 +29,8 @@ bool IMUAcquisition::init()
 
     _rate_hz             = 50;
     _last_sample_time_ms = to_ms_since_boot(get_absolute_time());
+    _latest              = {};
+    _has_sample          = false;
 
     return true;
 }
@@ -71,6 +75,15 @@ KX134_Status IMUAcquisition::task()
     //         filtered holds the smoothed output
     IMU_Data filtered = _filter.update(converted);
 
+    _latest.raw_x = raw.x;
+    _latest.raw_y = raw.y;
+    _latest.raw_z = raw.z;
+    _latest.x_g = filtered.x_g;
+    _latest.y_g = filtered.y_g;
+    _latest.z_g = filtered.z_g;
+    _latest.timestamp_ms = now;
+    _has_sample = true;
+
     // Step 4: log — RAW mode logs raw counts,
     //               CONVERTED mode logs filtered g values
     // FIX: timestamp_us removed — DataLogger::log() no longer
@@ -102,6 +115,16 @@ KX134_Range IMUAcquisition::getConverterRange() const
 float IMUAcquisition::getConverterScale() const
 {
     return _converter.getScale();
+}
+
+const IMUSample& IMUAcquisition::getLatestSample() const
+{
+    return _latest;
+}
+
+bool IMUAcquisition::hasSample() const
+{
+    return _has_sample;
 }
 
 /* ============================================================

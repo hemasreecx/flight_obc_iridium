@@ -190,6 +190,8 @@ bool init()
     {
         sensor_manager::request_imu_recalib();
         sensor_manager::request_mag_recalib();
+        sensor_manager::request_lsm_recalib();
+        sensor_manager::request_lsm_recalib();
     }
 
     // ── Sensor init ───────────────────────────────────────────

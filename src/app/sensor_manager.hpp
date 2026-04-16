@@ -44,6 +44,9 @@
 #include "modules/mag_acquisition.hpp"
 #include "modules/mag_conversion.hpp"
 #include "logging/qmc_data_logger.hpp"  // MagCalibStore + MagSample live here
+#include "modules/ls_acquisition.hpp"
+#include "modules/ls_conversion.hpp"
+#include "ina260.hpp"
 
 namespace sensor_manager
 {
@@ -81,6 +84,7 @@ void fill_record(log_format::Record& r, uint32_t counter);// here using record+ 
 bool imu_healthy();
 bool mag_healthy();
 bool lsm_healthy();
+bool ina_healthy();
 
 /* ============================================================
    Calibration requests

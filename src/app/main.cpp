@@ -9,6 +9,7 @@
 #include <stdint.h>
 
 #include "pin_config.hpp"
+#include "config.hpp"
 #include "log_format.hpp"
 
 #include "drivers/kx134.hpp"
@@ -30,14 +31,13 @@
 
 #define I2C_SPEED_HZ            400000
 #define KX134_ADDRESS           0x1E
-#define SAMPLE_RATE_HZ          50
+#define SAMPLE_RATE_HZ          5
 
 #define MAX_COMM_ERRORS         10
 #define MAX_RECOVERY_ATTEMPTS   3
 
 #define CALIB_SAMPLES           560
 #define CALIB_SAMPLE_DELAY_MS   5
-#define RECALIB_PROMPT_MS       5000
 #define KX134_DEBUG     0    
 #define QMC5883L_DEBUG  0  
 #define LED_PIN                 25
@@ -74,13 +74,20 @@ static const QMC5883L_Config MAG_CONFIG = {
 };
 
 
-static constexpr uint8_t RING_SIZE = 6;   // 2 packets worth
+static constexpr uint8_t PHASE_RING_SIZE = 12;   // 4 packets per phase
 
-static log_format::Record ring[RING_SIZE];
-static uint8_t            ring_head  = 0; // Core 1 reads from here
-static uint8_t            ring_tail  = 0; // Core 0 writes here
-static uint8_t            ring_count = 0;
-static mutex_t            ring_mutex;
+struct PhaseRing
+{
+    log_format::Record data[PHASE_RING_SIZE];
+    uint8_t head = 0;
+    uint8_t tail = 0;
+    uint8_t count = 0;
+};
+
+static PhaseRing ring_pre;
+static PhaseRing ring_blackout;
+static PhaseRing ring_post;
+static mutex_t   ring_mutex;
 
 
 static volatile bool     system_initialized    = false;
@@ -90,6 +97,45 @@ static volatile uint32_t mag_comm_errors       = 0;
 static volatile uint32_t imu_recovery_attempts = 0;
 static volatile uint32_t mag_recovery_attempts = 0;
 static uint32_t record_counter = 0; // incremented for each new record, used to track record age in the ring buffer
+
+enum class MissionPhase : uint8_t
+{
+    PRE = 0,
+    BLACKOUT = 1,
+    POST = 2,
+    DONE = 3
+};
+
+static volatile MissionPhase current_phase = MissionPhase::PRE;
+
+static MissionPhase compute_phase(uint32_t mission_s)
+{
+    if (mission_s < PHASE_PRE_DURATION_S) return MissionPhase::PRE;
+    if (mission_s < (PHASE_PRE_DURATION_S + PHASE_BLACKOUT_DURATION_S)) return MissionPhase::BLACKOUT;
+    if (mission_s < PHASE_TOTAL_DURATION_S) return MissionPhase::POST;
+    return MissionPhase::DONE;
+}
+
+static bool ring_push(PhaseRing& ring, const log_format::Record& rec)
+{
+    if (ring.count >= PHASE_RING_SIZE) return false;
+    ring.data[ring.tail] = rec;
+    ring.tail = static_cast<uint8_t>((ring.tail + 1) % PHASE_RING_SIZE);
+    ring.count++;
+    return true;
+}
+
+static bool ring_pop_batch(PhaseRing& ring, log_format::Record* out, uint8_t n)
+{
+    if (ring.count < n) return false;
+    for (uint8_t i = 0; i < n; i++)
+    {
+        out[i] = ring.data[ring.head];
+        ring.head = static_cast<uint8_t>((ring.head + 1) % PHASE_RING_SIZE);
+    }
+    ring.count = static_cast<uint8_t>(ring.count - n);
+    return true;
+}
 
 static void led_init()
 {
@@ -432,40 +478,37 @@ static void core1_entry()
 
     while (true)
     {
-        // ── Check if we have a full packet ready ──────────────
+        if (current_phase == MissionPhase::BLACKOUT)
+        {
+            sleep_ms(20);
+            continue;
+        }
+
         log_format::Record batch[rockblock_manager::MAX_RECORDS_PER_PACKET];
         bool got_batch = false;
 
         mutex_enter_blocking(&ring_mutex);
-        if (ring_count >= rockblock_manager::MAX_RECORDS_PER_PACKET)
+        if (current_phase == MissionPhase::POST)
         {
-            for (uint8_t i = 0; i < rockblock_manager::MAX_RECORDS_PER_PACKET; i++)
-            {
-                batch[i]  = ring[ring_head];
-                ring_head = (ring_head + 1) % RING_SIZE;
-            }
-            ring_count -= rockblock_manager::MAX_RECORDS_PER_PACKET;
-            got_batch = true;
+            got_batch = ring_pop_batch(ring_blackout, batch, rockblock_manager::MAX_RECORDS_PER_PACKET) ||
+                        ring_pop_batch(ring_post, batch, rockblock_manager::MAX_RECORDS_PER_PACKET) ||
+                        ring_pop_batch(ring_pre, batch, rockblock_manager::MAX_RECORDS_PER_PACKET);
+        }
+        else
+        {
+            got_batch = ring_pop_batch(ring_pre, batch, rockblock_manager::MAX_RECORDS_PER_PACKET);
         }
         mutex_exit(&ring_mutex);
 
         if (got_batch)
         {
-            DEBUG_PRINT("[core1] dequeued %d records, transmitting\n",
-                        rockblock_manager::MAX_RECORDS_PER_PACKET);
-
-            // transmit_records handles up to 3 retries internally
             bool ok = rockblock_manager::transmit_records(
                           batch,
                           rockblock_manager::MAX_RECORDS_PER_PACKET);
-
-            // Packet always dropped here regardless of result
-            DEBUG_PRINT("[core1] packet %s — slot cleared\n",
-                        ok ? "sent" : "dropped after max retries");
+            DEBUG_PRINT("[core1] packet %s\n", ok ? "sent" : "dropped after retries");
         }
         else
         {
-            // Nothing to do yet — yield for a bit
             sleep_ms(10);
         }
     }
@@ -673,20 +716,18 @@ static void main_loop()
         print_record(rec);
 #endif
 
-    // ── Push record to ring buffer (Core 1 will consume it) ───
+    // ── Push record into phase ring buffer ─────────────────────
+    const uint32_t mission_s = to_ms_since_boot(get_absolute_time()) / 1000;
+    current_phase = compute_phase(mission_s);
+
+    PhaseRing* target = &ring_pre;
+    if (current_phase == MissionPhase::BLACKOUT) target = &ring_blackout;
+    else if (current_phase == MissionPhase::POST) target = &ring_post;
+
     mutex_enter_blocking(&ring_mutex);
-    if (ring_count < RING_SIZE)
+    if (!ring_push(*target, rec))
     {
-        ring[ring_tail] = rec;
-        ring_tail       = (ring_tail + 1) % RING_SIZE;
-        ring_count++;
-        DEBUG_PRINT("[core0] pushed record %lu to ring (%d/%d)\n",
-                    rec.counter, ring_count, RING_SIZE);
-    }
-    else
-    {
-        // Core 1 is behind — drop this record to protect mission loop
-        DEBUG_PRINT("[core0] ring full — record %lu dropped\n", rec.counter);
+        DEBUG_PRINT("[core0] phase ring full — record %lu dropped\n", rec.counter);
     }
     mutex_exit(&ring_mutex);
 
@@ -733,7 +774,7 @@ int main()
         if (system_initialized)
             main_loop();
 
-        sleep_ms(1000);
+        sleep_ms(200);
     }
 
     return 0;

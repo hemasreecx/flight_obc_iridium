@@ -6,6 +6,17 @@
 #include "imu_conversion.hpp"
 #include "kx_data_logger.hpp"
 
+struct IMUSample
+{
+    int16_t raw_x;
+    int16_t raw_y;
+    int16_t raw_z;
+    float   x_g;
+    float   y_g;
+    float   z_g;
+    uint64_t timestamp_ms;
+};
+
 class IMUAcquisition
 {
 public:
@@ -17,6 +28,8 @@ public:
     void         setCalibrationOffsets(int16_t x, int16_t y, int16_t z);
     KX134_Range  getConverterRange() const;
     float        getConverterScale() const;
+    const IMUSample& getLatestSample() const;
+    bool hasSample() const;
 
     /**
      * @brief Reset the moving average filter.
@@ -33,6 +46,8 @@ private:
     IMUConversion _converter;
     MovingAverage _filter;        // owned — low-pass filter, lives here
     DataLogger&   _logger;
+    IMUSample     _latest;
+    bool          _has_sample;
 
     bool configureODR(uint32_t hz);
 };

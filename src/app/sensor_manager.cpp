@@ -9,6 +9,8 @@
 #include <stdio.h>
 #include <stdint.h>
 
+#include "logging/ls_data_logger.hpp"
+
 #if SYSTEM_DEBUG
 #define DBG(...) do { printf(__VA_ARGS__); fflush(stdout); } while(0)
 #else
@@ -24,14 +26,20 @@ namespace sensor_manager
 static bool _imu_healthy       = false;
 static bool _mag_healthy       = false;
 static bool _lsm_healthy       = false;
+static bool _ina_healthy       = false;
+static bool _lsm_has_sample    = false;
 static bool _force_imu_recalib = false;
 static bool _force_mag_recalib = false;
 static bool _force_lsm_recalib = false;
 
 static uint32_t _imu_comm_errors       = 0;
 static uint32_t _mag_comm_errors       = 0;
+static uint32_t _ina_comm_errors       = 0;
+static uint32_t _lsm_comm_errors       = 0;
 static uint32_t _imu_recovery_attempts = 0;
 static uint32_t _mag_recovery_attempts = 0;
+static uint32_t _ina_recovery_attempts = 0;
+static uint32_t _lsm_recovery_attempts = 0;
 
 static DataLogger _kx_logger(LoggerMode::CONVERTED);
 #if SENSOR_LOG_RAW
@@ -53,6 +61,13 @@ static const KX134_Config KX134_CFG = {
 
 static QMC5883L       _mag(MAG_I2C_BUS);
 static MagAcquisition _mag_acq(_mag, _qmc_logger);
+static LSM6DSV80X     _lsm(LS_I2C_BUS, LSM6DSV80X_I2C_ADDR_LOW);
+static LSM6DSV80X_Acquisition _lsm_acq(_lsm, SAMPLE_RATE_HZ);
+static Ina260         _ina(INA260_I2C_BUS);
+
+static float _ina_current_ma = 0.0f;
+static float _ina_voltage_mv = 0.0f;
+static bool  _ina_has_sample = false;
 
 static const QMC5883L_Config MAG_CFG = {
     .range                 = QMC5883L_Range::RANGE_8G,
@@ -80,6 +95,52 @@ static void i2c_bus_recovery(uint8_t sda_pin, uint8_t scl_pin)
     gpio_set_function(sda_pin, GPIO_FUNC_I2C);
     gpio_set_function(scl_pin, GPIO_FUNC_I2C);
     DBG("[sensor] I2C recovery done\n");
+}
+
+static int16_t to_i16_saturated(float value)
+{
+    if (value > 32767.0f) return 32767;
+    if (value < -32768.0f) return -32768;
+
+    // Round to nearest integer instead of truncating.
+    if (value >= 0.0f)
+        return static_cast<int16_t>(value + 0.5f);
+    return static_cast<int16_t>(value - 0.5f);
+}
+
+static uint16_t to_u16_saturated(float value)
+{
+    if (value > 65535.0f) return 65535;
+    if (value < 0.0f) return 0;
+
+    // Round to nearest integer instead of truncating.
+    return static_cast<uint16_t>(value + 0.5f);
+}
+
+static float lsm_raw_temp_to_celsius(int16_t raw_temp)
+{
+    return (static_cast<float>(raw_temp) / 256.0f) + 25.0f;
+}
+
+static void apply_lsm_calibration_from_store_or_default()
+{
+    LSM6DSV80X_CalibData stored{};
+    if (!_force_lsm_recalib && LSM6DSV80X_CalibStore::load(stored))
+    {
+        _lsm_acq.setGYOffsets(stored.gy_off_x, stored.gy_off_y, stored.gy_off_z);
+        _lsm_acq.setHGOffsets(stored.hg_off_x, stored.hg_off_y, stored.hg_off_z);
+        _lsm_acq.setTempOffset(stored.temp_off);
+        DBG("[sensor] LSM calib loaded\n");
+    }
+    else
+    {
+        _lsm_acq.clearGYOffsets();
+        _lsm_acq.clearHGOffsets();
+        _lsm_acq.clearTempOffset();
+        DBG("[sensor] LSM calib defaulted (zeros)\n");
+    }
+
+    _lsm_acq.resetFilters();
 }
 
 static void run_imu_calibration(int16_t& ox, int16_t& oy, int16_t& oz)
@@ -236,6 +297,75 @@ static bool init_kx134_with_retry()
 }
 
 
+static bool init_lsm_with_retry()
+{
+    for (uint8_t attempt = 1; attempt <= SENSOR_INIT_RETRIES; attempt++)
+    {
+        DBG("[sensor] LSM6DSV80X init attempt %d/%d\n", attempt, SENSOR_INIT_RETRIES);
+
+        if (_lsm.checkID() != LSM6DSV80X_Status::OK)
+        {
+            DBG("[sensor] LSM ID check failed\n");
+            i2c_bus_recovery(LS_SDA_PIN, LS_SCL_PIN);
+            sleep_ms(SENSOR_RETRY_DELAY_MS);
+            continue;
+        }
+
+        if (!_lsm_acq.init())
+        {
+            DBG("[sensor] LSM acquisition init failed\n");
+            sleep_ms(SENSOR_RETRY_DELAY_MS);
+            continue;
+        }
+
+        apply_lsm_calibration_from_store_or_default();
+        _lsm_has_sample = false;
+        _lsm_comm_errors = 0;
+        _lsm_recovery_attempts = 0;
+        DBG("[sensor] LSM6DSV80X OK (attempt %d)\n", attempt);
+        return true;
+    }
+
+    DBG("[sensor] LSM6DSV80X ISOLATED after %d attempts\n", SENSOR_INIT_RETRIES);
+    return false;
+}
+
+
+static bool init_ina_with_retry()
+{
+    for (uint8_t attempt = 1; attempt <= SENSOR_INIT_RETRIES; attempt++)
+    {
+        DBG("[sensor] INA260 init attempt %d/%d\n", attempt, SENSOR_INIT_RETRIES);
+
+        if (!_ina.reset())
+        {
+            DBG("[sensor] INA reset failed\n");
+            i2c_bus_recovery(INA260_SDA_PIN, INA260_SCL_PIN);
+            sleep_ms(SENSOR_RETRY_DELAY_MS);
+            continue;
+        }
+
+        sleep_ms(10);
+
+        if (!_ina.init())
+        {
+            DBG("[sensor] INA init failed\n");
+            sleep_ms(SENSOR_RETRY_DELAY_MS);
+            continue;
+        }
+
+        _ina_comm_errors = 0;
+        _ina_recovery_attempts = 0;
+        _ina_has_sample = false;
+        DBG("[sensor] INA260 OK (attempt %d)\n", attempt);
+        return true;
+    }
+
+    DBG("[sensor] INA260 ISOLATED after %d attempts\n", SENSOR_INIT_RETRIES);
+    return false;
+}
+
+
 static bool init_qmc_with_retry()
 {
     for (uint8_t attempt = 1; attempt <= SENSOR_INIT_RETRIES; attempt++)
@@ -322,6 +452,35 @@ bool init()
         DBG("[sensor] QMC FAIL — mag fields will be 0\n");
         all_ok = false;
     }
+
+    i2c_init(LS_I2C_BUS, I2C_SPEED_HZ);
+    gpio_set_function(LS_SDA_PIN, GPIO_FUNC_I2C);
+    gpio_set_function(LS_SCL_PIN, GPIO_FUNC_I2C);
+    gpio_pull_up(LS_SDA_PIN);
+    gpio_pull_up(LS_SCL_PIN);
+    sleep_ms(50);
+
+    _lsm_healthy = init_lsm_with_retry();
+    if (!_lsm_healthy)
+    {
+        DBG("[sensor] LSM FAIL — imu2 and obc_temp fields will be 0\n");
+        all_ok = false;
+    }
+
+    i2c_init(INA260_I2C_BUS, I2C_SPEED_HZ);
+    gpio_set_function(INA260_SDA_PIN, GPIO_FUNC_I2C);
+    gpio_set_function(INA260_SCL_PIN, GPIO_FUNC_I2C);
+    gpio_pull_up(INA260_SDA_PIN);
+    gpio_pull_up(INA260_SCL_PIN);
+    sleep_ms(50);
+
+    _ina_healthy = init_ina_with_retry();
+    if (!_ina_healthy)
+    {
+        DBG("[sensor] INA260 FAIL — battery fields will be 0\n");
+        all_ok = false;
+    }
+
     return all_ok;
 }
 
@@ -368,6 +527,101 @@ void task()
                     {
                         _imu_healthy = false;
                         DBG("[sensor] IMU UNHEALTHY — acc now 0\n");
+                    }
+                }
+            }
+        }
+    }
+
+
+    if (_lsm_healthy)
+    {
+        LSM6DSV80X_Status st = _lsm_acq.task();
+
+        if (st == LSM6DSV80X_Status::OK || st == LSM6DSV80X_Status::SKIPPED)
+        {
+            if (st == LSM6DSV80X_Status::OK)
+                _lsm_has_sample = true;
+            _lsm_comm_errors = 0;
+            _lsm_recovery_attempts = 0;
+        }
+        else
+        {
+            _lsm_comm_errors++;
+            DBG("[sensor] LSM comm error #%lu\n", _lsm_comm_errors);
+
+            if (_lsm_comm_errors >= MAX_COMM_ERRORS)
+            {
+                DBG("[sensor] LSM threshold — recovery\n");
+                i2c_bus_recovery(LS_SDA_PIN, LS_SCL_PIN);
+                _lsm.reset();
+                sleep_ms(50);
+
+                if (_lsm_acq.init())
+                {
+                    apply_lsm_calibration_from_store_or_default();
+                    _lsm_recovery_attempts = 0;
+                    _lsm_comm_errors = 0;
+                    DBG("[sensor] LSM recovery OK\n");
+                }
+                else
+                {
+                    _lsm_recovery_attempts++;
+                    _lsm_comm_errors = 0;
+
+                    if (_lsm_recovery_attempts >= MAX_RECOVERY_ATTEMPTS)
+                    {
+                        _lsm_healthy = false;
+                        _lsm_has_sample = false;
+                        DBG("[sensor] LSM UNHEALTHY — imu2 and obc_temp now 0\n");
+                    }
+                }
+            }
+        }
+    }
+
+
+    if (_ina_healthy)
+    {
+        float current_ma = 0.0f;
+        float voltage_mv = 0.0f;
+
+        if (_ina.readAll(current_ma, voltage_mv))
+        {
+            _ina_current_ma = current_ma;
+            _ina_voltage_mv = voltage_mv;
+            _ina_has_sample = true;
+            _ina_comm_errors = 0;
+            _ina_recovery_attempts = 0;
+        }
+        else
+        {
+            _ina_comm_errors++;
+            DBG("[sensor] INA comm error #%lu\n", _ina_comm_errors);
+
+            if (_ina_comm_errors >= MAX_COMM_ERRORS)
+            {
+                DBG("[sensor] INA threshold — recovery\n");
+                i2c_bus_recovery(INA260_SDA_PIN, INA260_SCL_PIN);
+                _ina.reset();
+                sleep_ms(50);
+
+                if (_ina.init())
+                {
+                    _ina_recovery_attempts = 0;
+                    _ina_comm_errors = 0;
+                    DBG("[sensor] INA recovery OK\n");
+                }
+                else
+                {
+                    _ina_recovery_attempts++;
+                    _ina_comm_errors = 0;
+
+                    if (_ina_recovery_attempts >= MAX_RECOVERY_ATTEMPTS)
+                    {
+                        _ina_healthy = false;
+                        _ina_has_sample = false;
+                        DBG("[sensor] INA UNHEALTHY — battery now 0\n");
                     }
                 }
             }
@@ -433,14 +687,20 @@ void fill_record(log_format::Record& r, uint32_t counter)
 
     if (_imu_healthy)
     {
-        KX134_Raw raw;
-        if (_imu.readRaw(raw) == KX134_Status::OK)
+        if (_imu_acq.hasSample())
         {
-            r.acc3_x = raw.x;
-            r.acc3_y = raw.y;
-            r.acc3_z = raw.z;
+            const IMUSample& s = _imu_acq.getLatestSample();
+#if SENSOR_LOG_RAW
+            r.acc3_x = s.raw_x;
+            r.acc3_y = s.raw_y;
+            r.acc3_z = s.raw_z;
+#else
+            // Store converted acceleration in milli-g as int16_t.
+            r.acc3_x = to_i16_saturated(s.x_g * 1000.0f);
+            r.acc3_y = to_i16_saturated(s.y_g * 1000.0f);
+            r.acc3_z = to_i16_saturated(s.z_g * 1000.0f);
+#endif
         }
-        // readRaw fail → stays 0
     }
 
     if (_mag_healthy)
@@ -451,11 +711,10 @@ void fill_record(log_format::Record& r, uint32_t counter)
         r.mag_y = s.raw_y;
         r.mag_z = s.raw_z;
 #else
-        r.mag_x = static_cast<int16_t>(s.x_gauss * 1000.0f);
-        r.mag_y = static_cast<int16_t>(s.y_gauss * 1000.0f);
-        r.mag_z = static_cast<int16_t>(s.z_gauss * 1000.0f);
+        r.mag_x = to_i16_saturated(s.x_gauss * 1000.0f);
+        r.mag_y = to_i16_saturated(s.y_gauss * 1000.0f);
+        r.mag_z = to_i16_saturated(s.z_gauss * 1000.0f);
 #endif
-        r.obc_temperature = (int16_t)(s.temperature * 100.0f); // need to change with lsm temperature  as obc temperature
     }
 
 
@@ -480,17 +739,35 @@ void fill_record(log_format::Record& r, uint32_t counter)
 #endif
     // disabled → stays 0
 
-    // ── IMU2 ──────────────────────────────────────────────────
-#if ENABLE_IMU2
-    // TODO: real IMU2 // we have need to fill the code
-#endif
-    // disabled → stays 0
+    // ── IMU2 (LSM6DSV80X) ─────────────────────────────────────
+    if (_lsm_healthy && _lsm_has_sample)
+    {
+        const LSM6DSV80X_Data hg = _lsm_acq.getFilteredHG();
+        const LSM6DSV80X_Data gy = _lsm_acq.getFilteredGY();
+
+        // HG is in g -> centi-g for int16 storage.
+        r.imu_acc_x = to_i16_saturated(hg.x * 100.0f);
+        r.imu_acc_y = to_i16_saturated(hg.y * 100.0f);
+        r.imu_acc_z = to_i16_saturated(hg.z * 100.0f);
+
+        // GY is in dps -> deci-dps for int16 storage.
+        r.imu_gyro_x = to_i16_saturated(gy.x * 10.0f);
+        r.imu_gyro_y = to_i16_saturated(gy.y * 10.0f);
+        r.imu_gyro_z = to_i16_saturated(gy.z * 10.0f);
+
+        const float lsm_temp_c = lsm_raw_temp_to_celsius(_lsm_acq.getRawTemp());
+        r.obc_temperature = to_i16_saturated(lsm_temp_c * 100.0f);
+    }
 
     // ── Battery ───────────────────────────────────────────────
-#if ENABLE_BATTERY
-   // we have real ina - need to get that 
-#endif
-    // disabled → stays 0
+    if (_ina_healthy && _ina_has_sample)
+    {
+        // INA driver outputs mV and mA.
+        // This is equivalent to V*1000 and A*1000 in integer record fields.
+        r.battery_voltage = to_u16_saturated(_ina_voltage_mv);
+        r.battery_current = to_i16_saturated(_ina_current_ma);
+    }
+    // INA unavailable/invalid sample -> battery fields stay 0
 
     // ── Always last ───────────────────────────────────────────
     r.commit = log_format::COMMIT_COMPLETE;
@@ -499,6 +776,7 @@ void fill_record(log_format::Record& r, uint32_t counter)
 bool imu_healthy() { return _imu_healthy; }
 bool mag_healthy() { return _mag_healthy; }
 bool lsm_healthy() {return _lsm_healthy; }
+bool ina_healthy() { return _ina_healthy; }
 // is there anyway i can get the same for ina as welll?
 void request_imu_recalib() { _force_imu_recalib = true; }
 void request_mag_recalib() { _force_mag_recalib = true; }

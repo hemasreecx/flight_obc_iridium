@@ -1,4 +1,5 @@
 #include "kx134.hpp"
+#include "config.hpp"
 #include "pico/stdlib.h"
 #include "pico/timeout_helper.h"
 #include <cstdio>
