@@ -27,11 +27,12 @@
 #define IRIDIUM_TX_PIN   4
 #define IRIDIUM_RX_PIN   5
 
-// ── Iridium control pins ─────────────────────────────
-#define IRIDIUM_ONOFF_PIN   14
-#define IRIDIUM_NETAVB_PIN   2    // network available input
-#define IRIDIUM_RI_PIN       3    // ring indicator input
-#define IRIDIUM_CTS_PIN      6
-#define IRIDIUM_RTS_PIN      7 
+// ── Iridium optional control/status pins ─────────────
+// Set to 0xFF when not wired (TX/RX + power only setup).
+#define IRIDIUM_ONOFF_PIN   0xFF
+#define IRIDIUM_NETAVB_PIN  0xFF
+#define IRIDIUM_RI_PIN      0xFF
+#define IRIDIUM_CTS_PIN     0xFF
+#define IRIDIUM_RTS_PIN     0xFF
 
 #define LED_PIN           25
