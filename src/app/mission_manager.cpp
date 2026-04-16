@@ -14,6 +14,8 @@ namespace mission_manager
 
 static constexpr uint8_t PHASE_RING_SIZE =
     MAX_PACKETS_PER_PHASE * rockblock_manager::MAX_RECORDS_PER_PACKET;
+static_assert(MAX_PACKETS_PER_PHASE * rockblock_manager::MAX_RECORDS_PER_PACKET <= 255,
+              "PHASE_RING_SIZE must fit in uint8_t");
 
 struct PhaseRing
 {
@@ -107,18 +109,6 @@ static Phase compute_phase(uint32_t secs)
     return Phase::DONE;
 }
 
-static void enqueue_record_for_phase(const log_format::Record& rec)
-{
-    PhaseRing* target = &_ring_pre;
-
-    if (_current_phase == Phase::BLACKOUT)
-        target = &_ring_blackout;
-    else if (_current_phase == Phase::POST)
-        target = &_ring_post;
-
-    ring_push(*target, rec);
-}
-
 static void account_successful_tx(uint8_t records_sent)
 {
     _tx_packets_sent++;
@@ -129,6 +119,24 @@ static void account_dropped_tx(uint8_t records_dropped)
 {
     _tx_packets_dropped++;
     _tx_records_dropped += records_dropped;
+}
+
+static void enqueue_record_for_phase(const log_format::Record& rec, Phase phase)
+{
+    PhaseRing* target = &_ring_pre;
+
+    if (phase == Phase::BLACKOUT)
+        target = &_ring_blackout;
+    else if (phase == Phase::POST)
+        target = &_ring_post;
+
+    if (!ring_push(*target, rec))
+    {
+        // Ring overflow: record dropped before TX. Count it and log once per drop.
+        account_dropped_tx(1);
+        printf("[mission] WARN: phase ring overflow in %d, record dropped\n", (int)phase);
+        fflush(stdout);
+    }
 }
 
 // Normal mission-time transmit policy.
@@ -240,15 +248,20 @@ void task()
                    _tx_records_dropped);
             fflush(stdout);
 
-            shutdown();
             _project_complete = true;
+            shutdown();
         }
 
         mission::mission_clock::maybe_save();
         return;
     }
 
-    _current_phase = phase_now;
+    if (_current_phase != phase_now)
+    {
+        printf("[mission] Phase change %d -> %d at %lus\n", (int)_current_phase, (int)phase_now, (unsigned long)elapsed_s());
+        fflush(stdout);
+        _current_phase = phase_now;
+    }
 
     sensor_manager::task();
 
@@ -256,7 +269,7 @@ void task()
     sensor_manager::fill_record(_latest_record, mission_sec);
     _counter++;
 
-    enqueue_record_for_phase(_latest_record);
+    enqueue_record_for_phase(_latest_record, phase_now);
     try_transmit_one_packet();
     mission::mission_clock::maybe_save();
 }

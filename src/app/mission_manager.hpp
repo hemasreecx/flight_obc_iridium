@@ -34,17 +34,18 @@ bool init();
 
 /* ============================================================
    task()
-   Call every loop from main().
-   - Runs sensor tasks
-   - stores in buffer file
-   - Checks phase boundary → switches file if needed
-   - Routes record to enabled outputs
+   Call every loop from system_init/main runtime loop.
+   - Computes mission phase from mission_clock
+   - Runs sensor_manager::task() and fills one record
+   - Enqueues into the current phase ring
+   - Attempts one Iridium packet transmit per loop
+   - On mission end: drains BLACKOUT → POST → PRE, then marks complete
    ============================================================ */
 void task();
 
 /* ============================================================
    shutdown()
-   Flush + close SD file, sleep Iridium.
+   Puts Iridium modem into sleep state.
    ============================================================ */
 void shutdown();
 
@@ -53,7 +54,7 @@ void shutdown();
    ============================================================ */
 Phase       current_phase();
 uint32_t    elapsed_seconds();
-uint32_t    record_counter();  
+uint32_t    record_counter();  // loop record count (separate from mission timestamp)
 bool        mission_complete();
 uint32_t    transmitted_record_count();
 uint32_t    transmitted_packet_count();

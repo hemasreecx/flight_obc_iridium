@@ -46,6 +46,8 @@
 #define MAG_CALIB_DELAY_MS      5
 #define LSM6DSV80X_CALIB_SAMPLES       1000
 #define LSM6DSV80X_CALIB_DELAY_MS      5
+// MAG temperature offset (deg C) applied in MagAcquisition
+#define MAG_TEMP_OFFSET_C       32.76f
 // Boot window (ms): optional per-sensor recalibration via USB serial — see system_init.cpp
 #define RECALIB_PROMPT_MS       10000
 

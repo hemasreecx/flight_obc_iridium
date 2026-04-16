@@ -164,6 +164,43 @@ static void apply_lsm_calibration_from_store_or_default()
     _lsm_acq.resetFilters();
 }
 
+static void apply_imu_calibration_from_store_or_zero()
+{
+    int16_t ox = 0, oy = 0, oz = 0;
+    CalibData stored{};
+    if (CalibStore::load(stored))
+    {
+        ox = stored.off_x; oy = stored.off_y; oz = stored.off_z;
+        DBG("[sensor] IMU calib (recovery) loaded X:%d Y:%d Z:%d\n", ox, oy, oz);
+    }
+    else
+    {
+        DBG("[sensor] IMU calib (recovery) defaulted to 0,0,0\n");
+    }
+    _imu_acq.setCalibrationOffsets(ox, oy, oz);
+}
+
+static void apply_mag_calibration_from_store_or_default()
+{
+    int16_t ox = 0, oy = 0, oz = 0;
+    MagCalibData stored{};
+    if (!_force_mag_recalib && MagCalibStore::load(stored))
+    {
+        ox = stored.hard_x; oy = stored.hard_y; oz = stored.hard_z;
+        _mag_acq.setHardIronOffsets(ox, oy, oz);
+        _mag_acq.setSoftIronMatrix(stored.soft_iron);
+        DBG("[sensor] MAG calib loaded X:%d Y:%d Z:%d\n", ox, oy, oz);
+    }
+    else
+    {
+        _mag_acq.setHardIronOffsets(0, 0, 0);
+        float identity[9] = { 1,0,0, 0,1,0, 0,0,1 };
+        _mag_acq.setSoftIronMatrix(identity);
+        DBG("[sensor] MAG calib defaulted (zeros)\n");
+    }
+    _mag_acq.resetFilter();
+}
+
 static void run_imu_calibration(int16_t& ox, int16_t& oy, int16_t& oz)
 {
     DBG("[sensor] IMU calibration — keep still\n");
@@ -209,9 +246,9 @@ static void run_imu_calibration(int16_t& ox, int16_t& oy, int16_t& oz)
     if (ay < 0.0f) ey = -ey;
     if (az < 0.0f) ez = -ez;
 
-    ox = (int16_t)(ax - ex);
-    oy = (int16_t)(ay - ey);
-    oz = (int16_t)(az - ez);
+    ox = to_i16_saturated(ax - ex);
+    oy = to_i16_saturated(ay - ey);
+    oz = to_i16_saturated(az - ez);
 
     _imu_acq.setCalibrationOffsets(ox, oy, oz);
     CalibStore::save(ox, oy, oz);
@@ -411,7 +448,7 @@ static bool init_qmc_with_retry()
             continue;
         }
 
-        _mag_acq.setTempOffset(32.76f);
+        _mag_acq.setTempOffset(MAG_TEMP_OFFSET_C);
 
         int16_t ox = 0, oy = 0, oz = 0;
         MagCalibData stored;
@@ -541,6 +578,8 @@ void task()
 
                 if (_imu.init(KX134_CFG) == KX134_Status::OK)
                 {
+                    apply_imu_calibration_from_store_or_zero();
+                    _imu_acq.resetFilter();
                     _imu_recovery_attempts = 0;
                     _imu_comm_errors       = 0;
                     DBG("[sensor] IMU recovery OK\n");
@@ -587,6 +626,7 @@ void task()
                 if (_lsm_acq.init())
                 {
                     apply_lsm_calibration_from_store_or_default();
+                    _lsm_has_sample = false;
                     _lsm_recovery_attempts = 0;
                     _lsm_comm_errors = 0;
                     DBG("[sensor] LSM recovery OK\n");
@@ -637,6 +677,7 @@ void task()
                 {
                     _ina_recovery_attempts = 0;
                     _ina_comm_errors = 0;
+                    _ina_has_sample = false;
                     DBG("[sensor] INA recovery OK\n");
                 }
                 else
@@ -680,6 +721,7 @@ void task()
 
                 if (_mag_acq.init(MAG_CFG))
                 {
+                    apply_mag_calibration_from_store_or_default();
                     _mag_recovery_attempts = 0;
                     _mag_comm_errors       = 0;
                     DBG("[sensor] MAG recovery OK\n");
@@ -706,7 +748,6 @@ void task()
 // Real values when healthy, 0s when disabled or unhealthy
 // 
 // ============================================================
-//need to read the conveterwed values even for the kx134 a welll but need to store in int not float 
 void fill_record(log_format::Record& r, uint32_t counter)
 {
     log_format::init_record(r);
@@ -754,7 +795,7 @@ void fill_record(log_format::Record& r, uint32_t counter)
     r.altitude  = 0;
 #else
     // No GPS — use boot timer as timestamp, coords stay 0
-    r.gps_time  = to_ms_since_boot(get_absolute_time()) / 1000;
+    r.gps_time  = counter;
     r.latitude  = 0;
     r.longitude = 0;
     r.altitude  = 0;
@@ -804,7 +845,6 @@ bool imu_healthy() { return _imu_healthy; }
 bool mag_healthy() { return _mag_healthy; }
 bool lsm_healthy() {return _lsm_healthy; }
 bool ina_healthy() { return _ina_healthy; }
-// is there anyway i can get the same for ina as welll?
 void request_imu_recalib() { _force_imu_recalib = true; }
 void request_mag_recalib() { _force_mag_recalib = true; }
 void request_lsm_recalib() { _force_lsm_recalib = true; }
