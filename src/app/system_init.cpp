@@ -38,29 +38,29 @@ static void poll_sensor_recalib_requests()
 
         switch (ch)
         {
-        case 'i':
-        case 'I':
-        case '1':
+        case 'cal_kx':
+        case 'CAL_KX':
+        case '123':
             sensor_manager::request_imu_recalib();
             printf("[system] Recalib requested: KX134 IMU\n");
             fflush(stdout);
             break;
-        case 'm':
-        case 'M':
-        case '2':
+        case 'cal_qmc':
+        case 'CAL_QMC':
+        case '456':
             sensor_manager::request_mag_recalib();
             printf("[system] Recalib requested: QMC5883L magnetometer\n");
             fflush(stdout);
             break;
-        case 'l':
-        case 'L':
-        case '3':
+        case 'cal_lsm':
+        case 'CAL_LSM':
+        case '789':
             sensor_manager::request_lsm_recalib();
             printf("[system] Recalib requested: LSM6DSV80X\n");
             fflush(stdout);
             break;
-        case 'c':
-        case 'C':
+        case 'cal':
+        case 'CAL':
             sensor_manager::request_imu_recalib();
             sensor_manager::request_mag_recalib();
             sensor_manager::request_lsm_recalib();
@@ -91,7 +91,7 @@ bool init()
     iridium_cfg.uart_inst = IRIDIUM_UART;
     iridium_cfg.tx_pin = IRIDIUM_TX_PIN;
     iridium_cfg.rx_pin = IRIDIUM_RX_PIN;
-    iridium_cfg.baud_rate = 19200;
+    iridium_cfg.baud_rate = IRIDIUM_BAUD_RATE;
     iridium_cfg.sleep_pin = IRIDIUM_ONOFF_PIN;
     iridium_cfg.netavb_pin = IRIDIUM_NETAVB_PIN;
     iridium_cfg.ri_pin = IRIDIUM_RI_PIN;

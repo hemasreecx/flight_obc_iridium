@@ -1,4 +1,5 @@
 #include "iridium_driver.hpp"
+#include "config.hpp"
 #include "pico/stdlib.h"
 #include "hardware/uart.h"
 #include "hardware/gpio.h"
@@ -74,9 +75,6 @@ static uint32_t    _session_timeout = DEFAULT_SESSION_TIMEOUT_MS;
 static uint32_t    _at_timeout      = DEFAULT_AT_TIMEOUT_MS;
 static DriverError _last_error      = DriverError::OK;
 
-static constexpr uint8_t  AT_MAX_RETRIES    = 3;
-static constexpr uint32_t AT_RETRY_DELAY_MS = 1000;
-static constexpr uint8_t  SES_MAX_RETRIES   = 1;
 
 static bool port_send(const char* s)
 {
@@ -127,13 +125,13 @@ static bool send_at(const char* cmd)
 }
 
 static bool send_at_retry(const char* cmd,
-                           uint8_t max_retries = AT_MAX_RETRIES)
+                           uint8_t max_retries = IRIDIUM_AT_MAX_RETRIES)
 {
     for (uint8_t attempt = 0; attempt < max_retries; attempt++)
     {
         if (send_at(cmd)) return true;
         if (_last_error != DriverError::UART_TIMEOUT) break; // last_error says what went wrong the last time 
-        if (attempt < max_retries - 1) sleep_ms(AT_RETRY_DELAY_MS); // after two tries it will go into sleep mode
+        if (attempt < max_retries - 1) sleep_ms(IRIDIUM_AT_RETRY_DELAY_MS); // after two tries it will go into sleep mode
     }
     return false;
 }
@@ -478,7 +476,7 @@ SbdixResult start_session_ex()
         return last_res;
     }
 
-    for (uint8_t attempt = 0; attempt < SES_MAX_RETRIES; attempt++)
+    for (uint8_t attempt = 0; attempt < IRIDIUM_SESSION_MAX_RETRIES; attempt++)
     {
         last_res = attempt_session_ex();
         if (last_res.mo_status == 0) return last_res;

@@ -1,6 +1,7 @@
 #include "rockblock_manager.hpp"
 #include "iridium_driver.hpp"
 #include "log_format.hpp"
+#include "config.hpp"
 #include "pico/stdlib.h"
 #include <string.h>
 #include <stdio.h>
@@ -8,10 +9,6 @@
 namespace rockblock_manager
 {
 
-static constexpr uint8_t  TX_MAX_RETRIES       = 3;
-static constexpr uint32_t TX_RETRY_DELAY_MS    = 2000;
-static constexpr uint32_t WAKE_SETTLE_MS       = 2000;  // wake 2 sec after waking modem to allow it to stabilize before we try to send data
-static constexpr uint32_t WRITE_RETRY_DELAY_MS = 1000; // wait before trying write
 
 
 static uint32_t monotonic_ms()
@@ -42,7 +39,7 @@ static bool wake_and_verify()
             return false;
         }
         _modem_sleeping = false;
-        sleep_ms(WAKE_SETTLE_MS);
+        sleep_ms(IRIDIUM_WAKE_SETTLE_MS);
     }
 
     if (!iridium_driver::is_alive())
@@ -60,14 +57,14 @@ static bool transmit_payload()
     if (_payload_size == 0)
         return true;
 
-    for (uint8_t attempt = 1; attempt <= TX_MAX_RETRIES; attempt++)
+    for (uint8_t attempt = 1; attempt <= IRIDIUM_TX_MAX_RETRIES; attempt++)
     {
-        printf("[rbmgr] TX attempt %d/%d\n", attempt, TX_MAX_RETRIES);
+        printf("[rbmgr] TX attempt %d/%d\n", attempt, IRIDIUM_TX_MAX_RETRIES);
 
         if (!wake_and_verify())
         {
             printf("[rbmgr] wake failed on attempt %d\n", attempt);
-            sleep_ms(TX_RETRY_DELAY_MS);
+            sleep_ms(IRIDIUM_TX_RETRY_DELAY_MS);
             continue;
         }
 
@@ -82,7 +79,7 @@ static bool transmit_payload()
             }
             printf("[rbmgr] write failed: %s\n",
                    iridium_driver::error_string(iridium_driver::last_error()));
-            sleep_ms(WRITE_RETRY_DELAY_MS);
+            sleep_ms(IRIDIUM_WRITE_RETRY_DELAY_MS);
         }
 
         if (!write_ok)
@@ -90,7 +87,7 @@ static bool transmit_payload()
             printf("[rbmgr] write_message failed after 3 attempts\n");
             iridium_driver::sleep();
             _modem_sleeping = true;
-            sleep_ms(TX_RETRY_DELAY_MS);
+            sleep_ms(IRIDIUM_TX_RETRY_DELAY_MS);
             continue;
         }
 
@@ -137,13 +134,13 @@ static bool transmit_payload()
         }
 
         printf("[rbmgr] transient failure — retrying in %lums\n",
-               (unsigned long)TX_RETRY_DELAY_MS);
+               (unsigned long)IRIDIUM_TX_RETRY_DELAY_MS);
         iridium_driver::sleep();
         _modem_sleeping = true;
-        sleep_ms(TX_RETRY_DELAY_MS);
+        sleep_ms(IRIDIUM_TX_RETRY_DELAY_MS);
     }
 
-    printf("[rbmgr] all %d attempts failed\n", TX_MAX_RETRIES);
+    printf("[rbmgr] all %d attempts failed\n", IRIDIUM_TX_MAX_RETRIES);
     iridium_driver::sleep();
     _modem_sleeping = true;
     _last_error     = ManagerError::SESSION_FAILED;

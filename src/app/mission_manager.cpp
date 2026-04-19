@@ -39,6 +39,7 @@ static uint32_t _tx_records_sent = 0;
 static uint32_t _tx_packets_sent = 0;
 static uint32_t _tx_records_dropped = 0;
 static uint32_t _tx_packets_dropped = 0;
+static uint32_t _last_tx_attempt_ms = 0;
 
 static bool ring_push(PhaseRing& ring, const log_format::Record& rec)
 {
@@ -93,6 +94,17 @@ static bool all_rings_empty()
 static uint32_t elapsed_s()
 {
     return mission::mission_clock::now_seconds();
+}
+
+static uint32_t monotonic_ms()
+{
+    return to_ms_since_boot(get_absolute_time());
+}
+
+static bool tx_interval_elapsed()
+{
+    const uint32_t now = monotonic_ms();
+    return (now - _last_tx_attempt_ms) >= IRIDIUM_TX_INTERVAL_MS;
 }
 
 static Phase compute_phase(uint32_t secs)
@@ -212,6 +224,7 @@ bool init()
     _tx_packets_sent = 0;
     _tx_records_dropped = 0;
     _tx_packets_dropped = 0;
+    _last_tx_attempt_ms = monotonic_ms();
 
     if (!mission::mission_clock::init())
         return false;
@@ -237,7 +250,11 @@ void task()
 
     if (_mission_time_done)
     {
-        drain_backlog_one_packet();
+        if (tx_interval_elapsed())
+        {
+            drain_backlog_one_packet();
+            _last_tx_attempt_ms = monotonic_ms();
+        }
 
         if (all_rings_empty())
         {
@@ -270,7 +287,11 @@ void task()
     _counter++;
 
     enqueue_record_for_phase(_latest_record, phase_now);
-    try_transmit_one_packet();
+    if (tx_interval_elapsed())
+    {
+        try_transmit_one_packet();
+        _last_tx_attempt_ms = monotonic_ms();
+    }
     mission::mission_clock::maybe_save();
 }
 

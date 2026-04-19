@@ -17,8 +17,6 @@
 #define DBG(...)
 #endif
 
-static constexpr uint8_t  SENSOR_INIT_RETRIES   = 3;
-static constexpr uint32_t SENSOR_RETRY_DELAY_MS = 2000;
 static constexpr uint32_t LED_PULSE_ON_MS       = 120;
 static constexpr uint32_t LED_PULSE_OFF_MS      = 120;
 
@@ -65,7 +63,7 @@ static QMC5883L       _mag(MAG_I2C_BUS);
 static MagAcquisition _mag_acq(_mag, _qmc_logger);
 static LSM6DSV80X     _lsm(LS_I2C_BUS, LSM6DSV80X_I2C_ADDR_LOW);
 static LSM6DSV80X_Acquisition _lsm_acq(_lsm, SAMPLE_RATE_HZ);
-static Ina260         _ina(INA260_I2C_BUS);
+static Ina260         _ina(INA260_I2C_BUS, INA260_I2C_ADDR);
 
 static float _ina_current_ma = 0.0f;
 static float _ina_voltage_mv = 0.0f;
@@ -161,8 +159,8 @@ static void apply_lsm_calibration_from_store_or_default()
     {
         _lsm_acq.setGYOffsets(stored.gy_off_x, stored.gy_off_y, stored.gy_off_z);
         _lsm_acq.setHGOffsets(stored.hg_off_x, stored.hg_off_y, stored.hg_off_z);
-        _lsm_acq.setTempOffset(stored.temp_off);
-        DBG("[sensor] LSM calib loaded\n");
+        _lsm_acq.setTempOffset(LSM_TEMP_OFFSET_RAW);
+        DBG("[sensor] LSM calib loaded (temp offset from config)\n");
     }
     else
     {
@@ -171,8 +169,8 @@ static void apply_lsm_calibration_from_store_or_default()
 
         _lsm_acq.clearGYOffsets();
         _lsm_acq.clearHGOffsets();
-        _lsm_acq.clearTempOffset();
-        DBG("[sensor] LSM calib defaulted (zeros)\n");
+        _lsm_acq.setTempOffset(LSM_TEMP_OFFSET_RAW);
+        DBG("[sensor] LSM calib defaulted (GY/HG zero, temp offset from config)\n");
     }
 
     _lsm_acq.resetFilters();
@@ -330,7 +328,7 @@ static bool init_kx134_with_retry()
         {
             DBG("[sensor] KX134 ID check failed\n");
             i2c_bus_recovery(KX134_SDA_PIN, KX134_SCL_PIN);
-            sleep_ms(SENSOR_RETRY_DELAY_MS);
+            sleep_ms(SENSOR_INIT_RETRY_DELAY_MS);
             continue;
         }
 
@@ -342,7 +340,7 @@ static bool init_kx134_with_retry()
         if (_imu.init(KX134_CFG) != KX134_Status::OK)
         {
             DBG("[sensor] KX134 init failed\n");
-            sleep_ms(SENSOR_RETRY_DELAY_MS);
+            sleep_ms(SENSOR_INIT_RETRY_DELAY_MS);
             continue;
         }
 
@@ -381,14 +379,14 @@ static bool init_lsm_with_retry()
         {
             DBG("[sensor] LSM ID check failed\n");
             i2c_bus_recovery(LS_SDA_PIN, LS_SCL_PIN);
-            sleep_ms(SENSOR_RETRY_DELAY_MS);
+            sleep_ms(SENSOR_INIT_RETRY_DELAY_MS);
             continue;
         }
 
         if (!_lsm_acq.init())
         {
             DBG("[sensor] LSM acquisition init failed\n");
-            sleep_ms(SENSOR_RETRY_DELAY_MS);
+            sleep_ms(SENSOR_INIT_RETRY_DELAY_MS);
             continue;
         }
 
@@ -418,7 +416,7 @@ static bool init_ina_with_retry()
         {
             DBG("[sensor] INA reset failed\n");
             i2c_bus_recovery(INA260_SDA_PIN, INA260_SCL_PIN);
-            sleep_ms(SENSOR_RETRY_DELAY_MS);
+            sleep_ms(SENSOR_INIT_RETRY_DELAY_MS);
             continue;
         }
 
@@ -427,7 +425,7 @@ static bool init_ina_with_retry()
         if (!_ina.init())
         {
             DBG("[sensor] INA init failed\n");
-            sleep_ms(SENSOR_RETRY_DELAY_MS);
+            sleep_ms(SENSOR_INIT_RETRY_DELAY_MS);
             continue;
         }
 
@@ -453,7 +451,7 @@ static bool init_qmc_with_retry()
         {
             DBG("[sensor] QMC soft reset failed\n");
             i2c_bus_recovery(MAG_SDA_PIN, MAG_SCL_PIN);
-            sleep_ms(SENSOR_RETRY_DELAY_MS);
+            sleep_ms(SENSOR_INIT_RETRY_DELAY_MS);
             continue;
         }
         sleep_ms(10);
@@ -461,7 +459,7 @@ static bool init_qmc_with_retry()
         if (!_mag_acq.init(MAG_CFG))
         {
             DBG("[sensor] QMC acq init failed\n");
-            sleep_ms(SENSOR_RETRY_DELAY_MS);
+            sleep_ms(SENSOR_INIT_RETRY_DELAY_MS);
             continue;
         }
 
@@ -811,25 +809,15 @@ void fill_record(log_format::Record& r, uint32_t counter)
 
 
     // ── GPS ───────────────────────────────────────────────────
-#if ENABLE_GPS
-    // TODO: real GPS
-    r.gps_time  = 0;
-    r.latitude  = 0;
-    r.longitude = 0;
-    r.altitude  = 0;
-#else
-    // No GPS — use boot timer as timestamp, coords stay 0
+    // GPS not installed yet: keep deterministic placeholder values.
     r.gps_time  = counter;
-    r.latitude  = 0;
-    r.longitude = 0;
-    r.altitude  = 0;
-#endif
+    r.latitude  = GPS_PLACEHOLDER_LAT;
+    r.longitude = GPS_PLACEHOLDER_LON;
+    r.altitude  = GPS_PLACEHOLDER_ALT;
 
     // ── Thermocouples ─────────────────────────────────────────
-#if ENABLE_THERMOCOUPLE
-    // TODO: real ADC
-#endif
-    // disabled → stays 0
+    // Thermocouples not installed yet.
+    // init_record() already zeroes thermocouples[]; keep as-is until ADC path is added.
 
     // ── IMU2 (LSM6DSV80X) ─────────────────────────────────────
     if (_lsm_healthy && _lsm_has_sample)
