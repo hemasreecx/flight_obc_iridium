@@ -15,6 +15,7 @@
 #include "modules/ls_acquisition.hpp"
 #include "modules/ls_conversion.hpp"
 #include "ina260.hpp"
+#include "orionb16.hpp"
 
 namespace sensor_manager
 {

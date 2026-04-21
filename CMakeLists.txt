@@ -43,6 +43,7 @@ add_executable(obc_flight
                 src/drivers/ina260.cpp
                 src/drivers/kx134.cpp
                 src/drivers/LSM6DSV80X.cpp
+                src/drivers/orionb16.cpp
                 src/drivers/qmc5883l.cpp
                 src/logging/kx_data_logger.cpp
                 src/logging/ls_data_logger.cpp

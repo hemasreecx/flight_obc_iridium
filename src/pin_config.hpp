@@ -39,6 +39,7 @@
 #define GNSS_TX_PIN         0
 #define GNSS_RX_PIN         1
 #define GNSS_RST_PIN        16
+#define GNSS_UART           uart0
 
 // thermocouple _adc_en gp 29, addc2_interrupt gp24, adc_1_interrupt gp23, adc2_cs - 22, spi1,  adc_mosi - 27, miso- 28, sck - 26, cs-21
 // buzzer pin - 9

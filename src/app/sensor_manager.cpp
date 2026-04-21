@@ -64,10 +64,14 @@ static MagAcquisition _mag_acq(_mag, _qmc_logger);
 static LSM6DSV80X     _lsm(LS_I2C_BUS, LSM6DSV80X_I2C_ADDR_LOW);
 static LSM6DSV80X_Acquisition _lsm_acq(_lsm, SAMPLE_RATE_HZ);
 static Ina260         _ina(INA260_I2C_BUS, INA260_I2C_ADDR);
+static OrionB16       _gnss(GNSS_UART);
 
 static float _ina_current_ma = 0.0f;
 static float _ina_voltage_mv = 0.0f;
 static bool  _ina_has_sample = false;
+static OrionB16::GNSSData _gnss_data = {};
+static bool _gnss_healthy = false;
+static bool _gnss_has_fix = false;
 
 static const QMC5883L_Config MAG_CFG = {
     .range                 = QMC5883L_Range::RANGE_8G,
@@ -553,6 +557,18 @@ bool init()
         all_ok = false;
     }
 
+    _gnss_healthy = _gnss.init(GNSS_TX_PIN, GNSS_RX_PIN);
+    _gnss_has_fix = false;
+    if (!_gnss_healthy)
+    {
+        DBG("[sensor] GNSS init FAIL — GPS fields will be placeholders\n");
+        all_ok = false;
+    }
+    else
+    {
+        DBG("[sensor] GNSS init OK\n");
+    }
+
     return all_ok;
 }
 
@@ -750,6 +766,12 @@ void task()
         }
     }
 
+    if (_gnss_healthy)
+    {
+        _gnss.update();
+        _gnss_has_fix = _gnss.getData(_gnss_data);
+    }
+
 }
 
 // ============================================================
@@ -795,12 +817,21 @@ void fill_record(log_format::Record& r, uint32_t counter)
     }
 
 
-    // ── GPS ───────────────────────────────────────────────────
-    // GPS not installed yet: keep deterministic placeholder values.
-    r.gps_time  = counter;
-    r.latitude  = GPS_PLACEHOLDER_LAT;
-    r.longitude = GPS_PLACEHOLDER_LON;
-    r.altitude  = GPS_PLACEHOLDER_ALT;
+    // ── GPS (Orion B16) ───────────────────────────────────────
+    if (_gnss_healthy && _gnss_has_fix)
+    {
+        r.gps_time  = _gnss_data.unix_timestamp;
+        r.latitude  = _gnss_data.latitude;
+        r.longitude = _gnss_data.longitude;
+        r.altitude  = _gnss_data.altitude;
+    }
+    else
+    {
+        r.gps_time  = counter;
+        r.latitude  = GPS_PLACEHOLDER_LAT;
+        r.longitude = GPS_PLACEHOLDER_LON;
+        r.altitude  = GPS_PLACEHOLDER_ALT;
+    }
 
     // ── Thermocouples ─────────────────────────────────────────
     // Thermocouples not installed yet.
