@@ -9,6 +9,7 @@
 #include "pico/stdlib.h"
 #include "hardware/gpio.h"
 #include <stdio.h>
+#include <string.h>
 
 namespace system_init
 {
@@ -22,54 +23,82 @@ namespace system_init
 static void poll_sensor_recalib_requests()
 {
     printf(
-        "Recalibration (optional, %ds window). Keys: I/1=KX134  M/2=QMC  L/3=LSM  C=all — then Enter optional\n",
+        "Recalibration (optional, %ds window). Commands: cal_kx | cal_qmc | cal_lsm | cal (then Enter)\n",
         RECALIB_PROMPT_MS / 1000);
     fflush(stdout);
 
+    auto apply_command = [](const char* cmd)
+    {
+        if (strcmp(cmd, "cal_kx") == 0 || strcmp(cmd, "CAL_KX") == 0)
+        {
+            sensor_manager::request_imu_recalib();
+            printf("[system] Recalib requested: KX134 IMU\n");
+            fflush(stdout);
+            return;
+        }
+
+        if (strcmp(cmd, "cal_qmc") == 0 || strcmp(cmd, "CAL_QMC") == 0)
+        {
+            sensor_manager::request_mag_recalib();
+            printf("[system] Recalib requested: QMC5883L magnetometer\n");
+            fflush(stdout);
+            return;
+        }
+
+        if (strcmp(cmd, "cal_lsm") == 0 || strcmp(cmd, "CAL_LSM") == 0)
+        {
+            sensor_manager::request_lsm_recalib();
+            printf("[system] Recalib requested: LSM6DSV80X\n");
+            fflush(stdout);
+            return;
+        }
+
+        if (strcmp(cmd, "cal") == 0 || strcmp(cmd, "CAL") == 0)
+        {
+            sensor_manager::request_imu_recalib();
+            sensor_manager::request_mag_recalib();
+            sensor_manager::request_lsm_recalib();
+            printf("[system] Recalib requested: ALL sensors (KX + QMC + LSM)\n");
+            fflush(stdout);
+            return;
+        }
+    };
+
     uint32_t deadline = to_ms_since_boot(get_absolute_time()) + RECALIB_PROMPT_MS;
+    char command[24] = {0};
+    uint8_t idx = 0;
     while (to_ms_since_boot(get_absolute_time()) < deadline)
     {
-        int ch = getchar_timeout_us(0); // this is non  - blocking , checks every 10ms if the char is given or not
+        int ch = getchar_timeout_us(0); // non-blocking poll
         if (ch == PICO_ERROR_TIMEOUT)
         {
             sleep_ms(10);
             continue;
         }
 
-        switch (ch)
+        if (ch == '\r' || ch == '\n')
         {
-        case 'cal_kx':
-        case 'CAL_KX':
-        case '123':
-            sensor_manager::request_imu_recalib();
-            printf("[system] Recalib requested: KX134 IMU\n");
-            fflush(stdout);
-            break;
-        case 'cal_qmc':
-        case 'CAL_QMC':
-        case '456':
-            sensor_manager::request_mag_recalib();
-            printf("[system] Recalib requested: QMC5883L magnetometer\n");
-            fflush(stdout);
-            break;
-        case 'cal_lsm':
-        case 'CAL_LSM':
-        case '789':
-            sensor_manager::request_lsm_recalib();
-            printf("[system] Recalib requested: LSM6DSV80X\n");
-            fflush(stdout);
-            break;
-        case 'cal':
-        case 'CAL':
-            sensor_manager::request_imu_recalib();
-            sensor_manager::request_mag_recalib();
-            sensor_manager::request_lsm_recalib();
-            printf("[system] Recalib requested: ALL sensors (KX + QMC + LSM)\n");
-            fflush(stdout);
-            break;
-        default:
-            break;
+            if (idx > 0)
+            {
+                command[idx] = '\0';
+                apply_command(command);
+                idx = 0;
+                memset(command, 0, sizeof(command));
+            }
+            continue;
         }
+
+        if (idx < sizeof(command) - 1)
+        {
+            command[idx++] = (char)ch;
+        }
+    }
+
+    // Process any partially typed command when window closes.
+    if (idx > 0)
+    {
+        command[idx] = '\0';
+        apply_command(command);
     }
 }
 
