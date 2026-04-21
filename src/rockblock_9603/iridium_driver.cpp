@@ -58,8 +58,10 @@ static bool uart_read_line(char* buffer, size_t max_len, uint32_t timeout_ms)
         if (!uart_read_byte(&b, 10)) continue;  // 10ms wait per each byte 
 
         char c = (char)b;
+        // Ignore NUL noise bytes often seen on floating/misaligned UART RX.
+        if (c == '\0') continue;
         if (idx < max_len - 1) buffer[idx++] = c;
-        if (c == '\n') break;
+        if (c == '\n' || c == '\r') break;
     }
 
     buffer[idx] = '\0';
@@ -136,6 +138,33 @@ static bool send_at_retry(const char* cmd,
     return false;
 }
 
+static void configure_uart(uint32_t baud_rate)
+{
+    uart_deinit(_uart_inst);
+    uart_init(_uart_inst, baud_rate);
+    gpio_set_function(_cfg.tx_pin, GPIO_FUNC_UART);
+    gpio_set_function(_cfg.rx_pin, GPIO_FUNC_UART);
+    uart_set_hw_flow(_uart_inst, false, false);
+    uart_set_format(_uart_inst, 8, 1, UART_PARITY_NONE);
+    uart_set_fifo_enabled(_uart_inst, true);
+}
+
+static bool wait_for_at_ready()
+{
+    // Keep startup AT probe short and deterministic.
+    static constexpr uint32_t kWarmupAttempts = 3;
+    static constexpr uint32_t kWarmupDelayMs  = 500;
+
+    for (uint32_t i = 0; i < kWarmupAttempts; i++)
+    {
+        if (send_at_retry("AT", 1))
+            return true;
+        sleep_ms(kWarmupDelayMs);
+    }
+
+    return false;
+}
+
 static void set_sleep_pin(bool awake)
 {
     if (_cfg.sleep_pin != 0xFF)
@@ -156,6 +185,10 @@ bool init(const Config& config)
         return false;
     }
 
+    // Configure UART before any raw/AT traffic.
+    configure_uart(_cfg.baud_rate);
+    sleep_ms(20);
+
 printf("[iridium] raw test — sending AT every 500ms for 5s\n"); // raw loop back test or bring up test
 fflush(stdout);
 
@@ -165,9 +198,13 @@ while (now_ms() < test_end)
 {
     printf("[cycle %d] sending: A T CR\n", cycle++);
     fflush(stdout);
-    uart_putc_raw(_uart_inst, 'A');
-    uart_putc_raw(_uart_inst, 'T');
-    uart_putc_raw(_uart_inst, '\r');
+    const uint8_t at_cmd[] = { 'A', 'T', '\r' };
+    if (!uart_send(at_cmd, sizeof(at_cmd), 200))
+    {
+        printf("[cycle] TX timeout\n");
+        fflush(stdout);
+        break;
+    }
 
     sleep_ms(500);
 
@@ -189,12 +226,16 @@ while (now_ms() < test_end)
     // ── Drain boot messages ─────────────────────────────────── /// removing the garbage / partial read
     sleep_ms(2000);
     uint32_t drained = 0;
-    while (uart_is_readable(_uart_inst))
+    for (uint8_t pass = 0; pass < 3; ++pass)
     {
-        char c = uart_getc(_uart_inst);
-        if (c >= 32 && c < 127) printf("%c", c);
-        else printf("[0x%02X]", (uint8_t)c);
-        drained++;
+        while (uart_is_readable(_uart_inst))
+        {
+            char c = uart_getc(_uart_inst);
+            if (c >= 32 && c < 127) printf("%c", c);
+            else printf("[0x%02X]", (uint8_t)c);
+            drained++;
+        }
+        sleep_ms(50);
     }
     if (drained > 0) printf("\n");
     printf("[iridium] drained %lu bytes\n", drained);
@@ -226,8 +267,8 @@ while (now_ms() < test_end)
         gpio_set_dir(_cfg.ri_pin, GPIO_IN);
     }
 
-  // after uart clean, pins set, then again checking whether the AT command is working or not
-    if (!send_at_retry("AT"))
+  // after uart clean, pins set, then verify AT responsiveness (with warmup + baud fallback)
+    if (!wait_for_at_ready())
     {
         _last_error = DriverError::MODEM_NOT_RESPONDING;
         return false;

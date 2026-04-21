@@ -5,6 +5,8 @@
 // error with the code 1 if the init fails
 int main()
 {
+    sleep_ms(5000);
+
     if (!system_init::init())
         return 1;
 

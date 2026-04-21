@@ -97,17 +97,10 @@ static void i2c_bus_recovery(uint8_t sda_pin, uint8_t scl_pin)
     DBG("[sensor] I2C recovery done\n");
 }
 
-static void ina_set_enabled(bool enabled)
-{
-    gpio_put(INA260_EN, enabled ? 1 : 0);
-}
-
 static void ina_power_cycle()
 {
-    DBG("[sensor] INA power cycle via EN pin\n");
-    ina_set_enabled(false);
+    DBG("[sensor] INA cooldown (no EN pin wired)\n");
     sleep_ms(20);
-    ina_set_enabled(true);
     sleep_ms(20);
 }
 
@@ -497,12 +490,6 @@ bool init()
     gpio_init(LED_PIN);
     gpio_set_dir(LED_PIN, GPIO_OUT);
     gpio_put(LED_PIN, 0);
-
-    // INA260 power-enable pin (active high): ensure sensor rail is ON before INA init
-    gpio_init(INA260_EN);
-    gpio_set_dir(INA260_EN, GPIO_OUT);
-    ina_set_enabled(true);
-    sleep_ms(10);
 
     bool all_ok = true;
 

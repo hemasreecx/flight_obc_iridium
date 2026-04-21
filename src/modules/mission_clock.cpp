@@ -29,7 +29,7 @@ uint32_t now_seconds()
     return s0 + (d / 1000u);
 }
 
-uint32_t now_ms()        
+uint32_t now_ms()      
 {
     uint32_t d = boot_ms() - ms0;
     return s0 * 1000u + d;
