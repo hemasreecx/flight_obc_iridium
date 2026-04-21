@@ -1,7 +1,26 @@
 #include "orionb16.hpp"
 #include <string.h>
 #include <stdlib.h>
+/*
 
+Module UART output
+        │
+        ▼  (each char)
+   encode(c)
+   ├─ '$'  → reset buffer
+   ├─ char → append
+   └─ '\n' → parseSentence()
+                │
+                ├─ GGA → lat, lon, alt, sats, time, valid
+                └─ RMC → velocity, date, time → unix_timestamp
+                               │
+                               ▼
+                        _current_data
+                               │
+                               ▼
+                   getData() → your application
+
+*/
 OrionB16::OrionB16(uart_inst_t* uart_inst)
     : _uart(uart_inst),
       _buffer_idx(0),
