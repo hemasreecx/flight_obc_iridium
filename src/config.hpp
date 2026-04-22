@@ -2,8 +2,12 @@
 
 // -- Build/Profile ------------------------------------------------------------
 // Production default: debug prints off.
-#define SYSTEM_DEBUG                 0   // 1=debug prints, 0=silent
+#define SYSTEM_DEBUG                 1   // 1=debug prints, 0=silent
 #define SENSOR_LOG_RAW               0   // 1=raw counts, 0=converted/scaled
+// 1 = stream IMU/MAG CSV logs to serial, 0 = suppress sensor CSV logs.
+#define SENSOR_SERIAL_STREAM_ENABLE  0
+// 1 = print record contents for each TX packet, 0 = status-only TX logs.
+#define TX_PACKET_PREVIEW_ENABLE     1
 
 // -- Sampling / Buses ---------------------------------------------------------
 #define SAMPLE_RATE_HZ               5
@@ -24,7 +28,7 @@
 // Per-phase backlog capacity in packet units.
 // Effective ring capacity in records =
 // MAX_PACKETS_PER_PHASE * rockblock_manager::MAX_RECORDS_PER_PACKET.
-#define MAX_PACKETS_PER_PHASE        12
+#define MAX_PACKETS_PER_PHASE        85
 
 // -- Sensor Addresses / IDs ---------------------------------------------------
 #define KX134_I2C_ADDR_LOW           0x1E

@@ -1,5 +1,6 @@
 #include "../modules/mag_acquisition.hpp"
 #include "../logging/qmc_data_logger.hpp"
+#include "config.hpp"
 #include "pico/stdlib.h"
 #include <cmath>      // atan2f, M_PI
 #include <cstring>    // memcpy
@@ -75,7 +76,9 @@ QMC5883L_Status MagAcquisition::task()
     // Compute: offset = (max + min) / 2 per axis
     if (_logger.getMode() == MagLoggerMode::PRE_CALIB)
     {
+#if SENSOR_SERIAL_STREAM_ENABLE
         _logger.logRaw(raw.x, raw.y, raw.z);
+#endif
         _sample_count++;
         return QMC5883L_Status::OK;
     }
@@ -93,7 +96,9 @@ QMC5883L_Status MagAcquisition::task()
         _sensor.readTemperature(temp);
         temp += _temp_offset;
 
+#if SENSOR_SERIAL_STREAM_ENABLE
         _logger.logCalibrated(cx, cy, cz, temp);
+#endif
         _sample_count++;
         return QMC5883L_Status::OK;
     }
@@ -102,7 +107,9 @@ QMC5883L_Status MagAcquisition::task()
     if (!readAndProcess(raw))
         return QMC5883L_Status::READ_ERROR;
 
+#if SENSOR_SERIAL_STREAM_ENABLE
     _logger.log(_latest);
+#endif
     return QMC5883L_Status::OK;
 }
 

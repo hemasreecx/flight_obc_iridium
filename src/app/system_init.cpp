@@ -64,11 +64,27 @@ static void poll_sensor_recalib_requests()
         }
     };
 
-    uint32_t deadline = to_ms_since_boot(get_absolute_time()) + RECALIB_PROMPT_MS;
+    const uint32_t start_ms = to_ms_since_boot(get_absolute_time());
+    uint32_t deadline = start_ms + RECALIB_PROMPT_MS;
+    int32_t last_announced_remaining_s = -1;
     char command[24] = {0};
     uint8_t idx = 0;
     while (to_ms_since_boot(get_absolute_time()) < deadline)
     {
+        const uint32_t now_ms = to_ms_since_boot(get_absolute_time());
+        const uint32_t elapsed_ms = now_ms - start_ms;
+        const int32_t remaining_s =
+            (int32_t)((RECALIB_PROMPT_MS > elapsed_ms)
+                          ? ((RECALIB_PROMPT_MS - elapsed_ms + 999) / 1000)
+                          : 0);
+        if (remaining_s != last_announced_remaining_s)
+        {
+            last_announced_remaining_s = remaining_s;
+            printf("[system] recalib window: %lds left (type cal_kx | cal_qmc | cal_lsm | cal + Enter)\n",
+                   (long)remaining_s);
+            fflush(stdout);
+        }
+
         int ch = getchar_timeout_us(0); // non-blocking poll
         if (ch == PICO_ERROR_TIMEOUT)
         {

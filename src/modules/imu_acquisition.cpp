@@ -1,4 +1,5 @@
 #include "imu_acquisition.hpp"
+#include "config.hpp"
 #include "pico/stdlib.h"
 #include "imu_conversion.hpp"
 #include "kx_data_logger.hpp"
@@ -88,7 +89,9 @@ KX134_Status IMUAcquisition::task()
     //               CONVERTED mode logs filtered g values
     // FIX: timestamp_us removed — DataLogger::log() no longer
     //      accepts it. Was unused anyway.
+#if SENSOR_SERIAL_STREAM_ENABLE
     _logger.log(raw, filtered);
+#endif
 
     return KX134_Status::OK;
 }

@@ -29,6 +29,36 @@ static bool     _mobile_originated_available = false;
 static uint8_t  _payload[iridium_driver::MAX_SBD_PAYLOAD];
 static uint16_t _payload_size = 0;
 
+static void log_packet_preview(const log_format::Record* records, uint8_t count)
+{
+#if TX_PACKET_PREVIEW_ENABLE
+    printf("[rbmgr] TX packet preview (%u records)\n", (unsigned)count);
+    for (uint8_t i = 0; i < count; i++)
+    {
+        const log_format::Record& r = records[i];
+        printf("[rbmgr] rec[%u] t=%lu gps=%lu lat=%ld lon=%ld alt=%ld "
+               "acc=(%d,%d,%d) imu2_acc=(%d,%d,%d) imu2_gyro=(%d,%d,%d) "
+               "mag=(%d,%d,%d) batt=(%u,%d) obc_temp=%d commit=%u\n",
+               (unsigned)i,
+               (unsigned long)r.counter,
+               (unsigned long)r.gps_time,
+               (long)r.latitude,
+               (long)r.longitude,
+               (long)r.altitude,
+               (int)r.acc3_x, (int)r.acc3_y, (int)r.acc3_z,
+               (int)r.imu_acc_x, (int)r.imu_acc_y, (int)r.imu_acc_z,
+               (int)r.imu_gyro_x, (int)r.imu_gyro_y, (int)r.imu_gyro_z,
+               (int)r.mag_x, (int)r.mag_y, (int)r.mag_z,
+               (unsigned)r.battery_voltage, (int)r.battery_current,
+               (int)r.obc_temperature,
+               (unsigned)r.commit);
+    }
+#else
+    (void)records;
+    (void)count;
+#endif
+}
+
 static bool wake_and_verify()
 {
     if (_modem_sleeping)
@@ -214,8 +244,13 @@ bool transmit_records(const log_format::Record* records, uint8_t count)
     _payload_size = (uint16_t)(count * log_format::RECORD_SIZE);
     memcpy(_payload, records, _payload_size);
 
-    printf("[rbmgr] transmit_records: %d records, %d bytes\n",
-           count, _payload_size);
+    const uint32_t first_counter = records[0].counter;
+    const uint32_t last_counter  = records[count - 1].counter;
+    printf("[rbmgr] transmit_records: %d records, %d bytes, mission_counter=[%lu..%lu]\n",
+           count, _payload_size,
+           (unsigned long)first_counter,
+           (unsigned long)last_counter);
+    log_packet_preview(records, count);
 
     // Attempt TX — packet is dropped by Core 1 regardless of result
     bool ok = transmit_payload();

@@ -55,6 +55,8 @@ bool imu_healthy();
 bool mag_healthy();
 bool lsm_healthy();
 bool ina_healthy();
+bool gnss_healthy();
+bool gnss_has_fix();
 
 /* ============================================================
    Calibration requests

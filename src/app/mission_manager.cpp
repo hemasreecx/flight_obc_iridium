@@ -43,13 +43,19 @@ static uint32_t _last_tx_attempt_ms = 0;
 
 static bool ring_push(PhaseRing& ring, const log_format::Record& rec)
 {
+    bool dropped_oldest = false;
     if (ring.count >= PHASE_RING_SIZE)
-        return false;
+    {
+        // Keep ring bounded without hard-fail spam: drop oldest, keep newest.
+        ring.head = static_cast<uint8_t>((ring.head + 1) % PHASE_RING_SIZE);
+        ring.count = static_cast<uint8_t>(ring.count - 1);
+        dropped_oldest = true;
+    }
 
     ring.data[ring.tail] = rec;
     ring.tail = static_cast<uint8_t>((ring.tail + 1) % PHASE_RING_SIZE);
     ring.count++;
-    return true;
+    return !dropped_oldest;
 }
 
 static bool ring_pop_batch(PhaseRing& ring,
@@ -144,10 +150,8 @@ static void enqueue_record_for_phase(const log_format::Record& rec, Phase phase)
 
     if (!ring_push(*target, rec))
     {
-        // Ring overflow: record dropped before TX. Count it and log once per drop.
+        // Ring full: oldest record was dropped to make room for latest.
         account_dropped_tx(1);
-        printf("[mission] WARN: phase ring overflow in %d, record dropped\n", (int)phase);
-        fflush(stdout);
     }
 }
 

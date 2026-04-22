@@ -27,6 +27,7 @@ static bool _imu_healthy       = false;
 static bool _mag_healthy       = false;
 static bool _lsm_healthy       = false;
 static bool _ina_healthy       = false;
+static bool _gnss_healthy      = false;
 static bool _lsm_has_sample    = false;
 static bool _force_imu_recalib = false;
 static bool _force_mag_recalib = false;
@@ -35,6 +36,7 @@ static bool _force_lsm_recalib = false;
 static uint32_t _imu_comm_errors       = 0;
 static uint32_t _mag_comm_errors       = 0;
 static uint32_t _ina_comm_errors       = 0;
+static uint32_t _gnss_recovery_attempts = 0;
 static uint32_t _lsm_comm_errors       = 0;
 static uint32_t _imu_recovery_attempts = 0;
 static uint32_t _mag_recovery_attempts = 0;
@@ -70,7 +72,6 @@ static float _ina_current_ma = 0.0f;
 static float _ina_voltage_mv = 0.0f;
 static bool  _ina_has_sample = false;
 static OrionB16::GNSSData _gnss_data = {};
-static bool _gnss_healthy = false;
 static bool _gnss_has_fix = false;
 
 static const QMC5883L_Config MAG_CFG = {
@@ -485,6 +486,26 @@ static bool init_qmc_with_retry()
     return false;
 }
 
+static bool init_gnss_with_retry()
+{
+    for (uint8_t attempt = 1; attempt <= SENSOR_INIT_RETRIES; attempt++)
+    {
+        DBG("[sensor] GNSS init attempt %d/%d\n", attempt, SENSOR_INIT_RETRIES);
+        if (_gnss.init(GNSS_TX_PIN, GNSS_RX_PIN))
+        {
+            _gnss_recovery_attempts = 0;
+            _gnss_has_fix = false;
+            DBG("[sensor] GNSS OK (attempt %d)\n", attempt);
+            return true;
+        }
+
+        sleep_ms(SENSOR_INIT_RETRY_DELAY_MS);
+    }
+
+    DBG("[sensor] GNSS ISOLATED after %d attempts\n", SENSOR_INIT_RETRIES);
+    return false;
+}
+
 // ============================================================
 // init()
 // ============================================================
@@ -557,8 +578,7 @@ bool init()
         all_ok = false;
     }
 
-    _gnss_healthy = _gnss.init(GNSS_TX_PIN, GNSS_RX_PIN);
-    _gnss_has_fix = false;
+    _gnss_healthy = init_gnss_with_retry();
     if (!_gnss_healthy)
     {
         DBG("[sensor] GNSS init FAIL — GPS fields will be placeholders\n");
@@ -875,6 +895,8 @@ bool imu_healthy() { return _imu_healthy; }
 bool mag_healthy() { return _mag_healthy; }
 bool lsm_healthy() {return _lsm_healthy; }
 bool ina_healthy() { return _ina_healthy; }
+bool gnss_healthy() { return _gnss_healthy; }
+bool gnss_has_fix() { return _gnss_has_fix; }
 void request_imu_recalib() { _force_imu_recalib = true; }
 void request_mag_recalib() { _force_mag_recalib = true; }
 void request_lsm_recalib() { _force_lsm_recalib = true; }
